@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>libcurl.js TLS fingerprint test</title>
+    <script defer src="/libcurl.js" onload="libcurl.load_wasm('/libcurl.wasm');"></script>
+    <style>
+      body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 16px; }
+      pre { background: #f4f4f4; border: 1px solid #ccc; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+      #status { color: #555; }
+      #raw .curl_output { color: #888; }
+      button { padding: 6px 14px; font-size: 14px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>libcurl.js TLS fingerprint test</h1>
+    <p id="status">Waiting for libcurl.js to load...</p>
+    <p>
+      <label for="url">URL:</label>
+      <input type="text" id="url" value="https://tls.browserleaks.com/" style="width: 360px;">
+      <button id="go">Request</button>
+    </p>
+    <p>
+      <label for="ws">Wisp proxy (ws://...):</label>
+      <input type="text" id="ws" style="width: 360px;" placeholder="ws://localhost:8787/">
+      <button id="apply-ws">Apply</button>
+      <span id="ws-status"></span>
+    </p>
+    <p>
+      <label for="profile">Impersonate profile:</label>
+      <select id="profile">
+        <option value="chrome146" selected>chrome146</option>
+        <option value="chrome150">chrome150</option>
+        <option value="chrome142">chrome142</option>
+        <option value="chrome136">chrome136</option>
+        <option value="chrome131">chrome131</option>
+        <option value="chrome124">chrome124</option>
+        <option value="chrome120">chrome120</option>
+        <option value="chrome116">chrome116</option>
+        <option value="edge101">edge101</option>
+        <option value="safari180">safari180</option>
+        <option value="firefox144">firefox144</option>
+        <option value="safari155">safari155</option>
+        <option value="">No impersonation</option>
+      </select>
+      <button id="apply-profile">Apply</button>
+      <span id="profile-status"></span>
+    </p>
+    <h3>Raw curl output:</h3>
+    <pre id="raw"></pre>
+    <h3>Response body:</h3>
+    <pre id="body"></pre>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const rawEl = document.getElementById("raw");
+      const bodyEl = document.getElementById("body");
+      const profileSel = document.getElementById("profile");
+      const profileStatus = document.getElementById("profile-status");
+      const wsInput = document.getElementById("ws");
+      const wsStatus = document.getElementById("ws-status");
+
+      wsInput.value = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+
+      function apply_ws() {
+        const ws_url = wsInput.value.trim();
+        libcurl.set_websocket(ws_url);
+        wsStatus.innerText = ws_url ? `Wisp proxy: ${ws_url}` : "Wisp proxy not set";
+      }
+
+      function apply_profile() {
+        const name = profileSel.value;
+        libcurl.impersonate = name;
+        profileStatus.innerText = name ? `Active: ${name}` : "Impersonation disabled";
+      }
+
+      async function do_request() {
+        const url = document.getElementById("url").value;
+        rawEl.innerText = "";
+        bodyEl.innerText = "";
+        apply_profile();
+        rawEl.innerText += `GET ${url}\n\n`;
+        try {
+          const r = await libcurl.fetch(url, {_libcurl_verbose: 1});
+          rawEl.innerText += `HTTP ${r.status} ${r.statusText}\ncontent-type: ${r.headers.get("content-type")}\n`;
+          let text = await r.text();
+          bodyEl.textContent = text;
+          statusEl.innerText = `Request finished. Body length: ${text.length} chars.`;
+        } catch (e) {
+          statusEl.innerText = "Error: " + e;
+          rawEl.innerText += "Error: " + e;
+        }
+      }
+
+      document.addEventListener("libcurl_load", () => {
+        apply_ws();
+        libcurl.stderr = (text) => { rawEl.innerText += text + "\n"; };
+        libcurl.stdout = (text) => { rawEl.innerText += text + "\n"; };
+        const ver = libcurl.version;
+        statusEl.innerText = `libcurl loaded (v${ver.lib}, curl ${ver.curl}, TLS ${ver.ssl}).`;
+        document.title += " - ready";
+        document.getElementById("go").addEventListener("click", do_request);
+        document.getElementById("apply-profile").addEventListener("click", apply_profile);
+        document.getElementById("apply-ws").addEventListener("click", apply_ws);
+        apply_profile();
+      });
+    </script>
+  </body>
+</html>

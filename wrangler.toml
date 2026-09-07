@@ -1,0 +1,24 @@
+name = "wisp-worker"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Serve static test assets (libcurl.js, libcurl.wasm, browserleaks.html, ...)
+# from the assets/ directory. Access in code via env.ASSETS.fetch().
+# run_worker_first keeps WebSocket upgrade requests (e.g. /) routed to the
+# worker instead of being served directly from the asset store.
+assets = { directory = "./assets", binding = "ASSETS", run_worker_first = true }
+
+# Optional environment variables for the worker.
+#
+#   RATELIMIT_ENABLED       "true" to enable the fixed-window rate limiter.
+#   RATELIMIT_CONNECTIONS   max new streams per ip per window (default 30).
+#   RATELIMIT_WINDOW        window length in seconds (default 60).
+#   ALLOW_LOOPBACK          "true" to allow connections to loopback ips.
+#   ALLOW_PRIVATE           "true" to allow connections to private ips.
+#
+# [vars]
+# RATELIMIT_ENABLED = "true"
+# RATELIMIT_CONNECTIONS = "30"
+# RATELIMIT_WINDOW = "60"
+# ALLOW_LOOPBACK = "false"
+# ALLOW_PRIVATE = "false"

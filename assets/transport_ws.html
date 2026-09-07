@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>transport ws</title>
+    <script defer src="/libcurl.js" onload="libcurl.load_wasm('/libcurl.wasm');"></script>
+  </head>
+  <body>
+    <label for="server">Wisp proxy:</label>
+    <input type="text" id="server" style="width: 320px;" placeholder="ws://localhost:8787/" onchange="run()">
+    <button id="run">Run test</button>
+    <pre id="log"></pre>
+    <script>
+      const log = document.getElementById("log");
+      const server = document.getElementById("server");
+      server.value = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+      document.getElementById("run").addEventListener("click", run);
+
+      function logln(s) {
+        log.textContent += s + "\n";
+      }
+
+      async function run() {
+        log.textContent = "";
+        try {
+          logln("loaded, ready=" + libcurl.ready);
+          libcurl.set_websocket(server.value);
+          const OrigWisp = libcurl.wisp.WispWebSocket;
+          let urls = [];
+          libcurl.transport = class DebugTransport extends OrigWisp {
+            constructor(url, ...args) {
+              logln("WISP URL: " + url);
+              urls.push(url);
+              super(url, ...args);
+            }
+          };
+          libcurl.stderr = (s) => logln("  [stderr] " + s);
+          libcurl.stdout = (s) => logln("  [stdout] " + s);
+          logln("> fetch via " + server.value);
+          let r = await libcurl.fetch("https://tls.browserleaks.com/", {_libcurl_verbose: 1});
+          logln("done. status=" + r.status);
+          logln("URLS: " + urls.join(" | "));
+          let text = await r.text();
+          logln("BODY START:\n" + text.slice(0, 500) + "\nBODY END");
+        } catch (e) {
+          logln("ERROR: " + e + "\n" + (e && e.stack || ""));
+        }
+      }
+
+      document.addEventListener("libcurl_load", () => { run(); });
+    </script>
+  </body>
+</html>
