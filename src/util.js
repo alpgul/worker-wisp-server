@@ -151,13 +151,17 @@ export function create_info_packet(major_version, minor_version, extensions_byte
   return create_packet(packet_types.INFO, 0, payload)
 }
 
-//parse a password auth client payload:
-//[username_len u8][username utf-8][password utf-8 (rest of payload)]
+//parse a password auth client payload.
+//note: the v2 protocol spec omits the password length, but the reference
+//implementation (wasm-libcurl/wisp-js) sends a u16 password length here, so we
+//follow that format for wire compatibility:
+//[username_len u8][password_len u16 LE][username utf-8][password utf-8]
 export function parse_password_auth(payload) {
-  if (payload.length < 2) return null
+  if (payload.length < 3) return null
   let username_len = payload[0]
-  if (payload.length < 1 + username_len) return null
-  let username = bytes_to_str(payload.subarray(1, 1 + username_len))
-  let password = bytes_to_str(payload.subarray(1 + username_len))
+  let password_len = uint_from_array(payload.subarray(1, 3))
+  if (payload.length < 3 + username_len + password_len) return null
+  let username = bytes_to_str(payload.subarray(3, 3 + username_len))
+  let password = bytes_to_str(payload.subarray(3 + username_len, 3 + username_len + password_len))
   return { username, password }
 }

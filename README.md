@@ -66,6 +66,8 @@ Configuration is done via Worker environment variables, read from the `env` bind
 
 Both authentication variables must be set for auth to be enabled. Failed auth (`0xc0`/`0xc2`) and blocked destinations (`0x48`) end the stream/connection with the corresponding Wisp close reason.
 
+> Password-auth wire format: the v2 protocol spec omits the password length, but the reference implementation ([wisp-js](https://github.com/wasm-libcurl/wisp-js)) sends a `u16` password length in the client credentials. This worker follows the wisp-js layout (`[username_len u8][password_len u16 LE][username][password]`) for interoperability.
+
 The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee.
 
 ## Testing

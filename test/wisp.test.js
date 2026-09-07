@@ -77,14 +77,16 @@ function parseExtensions(bytes) {
   return out
 }
 
-//build the password auth client payload: [username_len u8][username][password]
+//build the password auth client payload: [username_len u8][password_len u16 LE][username][password]
 function passwordAuthPayload(username, password) {
   const u = new TextEncoder().encode(username)
   const p = new TextEncoder().encode(password)
-  const out = new Uint8Array(1 + u.length + p.length)
+  const out = new Uint8Array(3 + u.length + p.length)
   out[0] = u.length
-  out.set(u, 1)
-  out.set(p, 1 + u.length)
+  out[1] = p.length & 0xff
+  out[2] = (p.length >> 8) & 0xff
+  out.set(u, 3)
+  out.set(p, 3 + u.length)
   return out
 }
 
