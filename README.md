@@ -1,12 +1,14 @@
 # wisp-worker
 
-A [Wisp v1](https://github.com/MercuryWorkshop/wisp-protocol) server implemented as a Cloudflare Worker. It is wire-compatible with [wisp-server-python](https://github.com/MercuryWorkshop/wisp-server-python), so any Wisp client (including [libcurl.js](https://github.com/ading2210/libcurl.js)) works unchanged — just point it at the worker's URL.
+A [Wisp](https://github.com/MercuryWorkshop/wisp-protocol) server (**v1 and v2**) implemented as a Cloudflare Worker. It is wire-compatible with [wisp-server-python](https://github.com/MercuryWorkshop/wisp-server-python), so any Wisp client (including [libcurl.js](https://github.com/ading2210/libcurl.js)) works unchanged — just point it at the worker's URL.
+
+Wisp v2 is used when the client's websocket upgrade carries a `Sec-WebSocket-Protocol` header (the client requests the `wisp-v2` subprotocol, which the worker echoes in the 101 response). Connections without that header are served with the plain v1 flow. On v2, the worker supports extension negotiation, password authentication, a MOTD, and stream-open confirmation.
 
 Unlike the Python server, this worker:
 
 - Runs on Cloudflare's edge (no server of your own to maintain).
 - Relays raw TCP over Cloudflare's `connect()` API (`cloudflare:sockets`). The default connector performs real outbound TCP on **all plans, including the free tier** — the WARP protocol (which would only add UDP) is not used.
-- Does **not** support UDP streams. A UDP `CONNECT` packet is rejected with a `CLOSE (0x42)` packet.
+- Does **not** support UDP streams. A UDP `CONNECT` packet is rejected with a `CLOSE (0x48)` packet, and the UDP extension is absent from the v2 handshake so well-behaved v2 clients never request it.
 
 ## Usage
 
@@ -35,6 +37,15 @@ wss://<your-worker>.<your-subdomain>.workers.dev/
 
 For libcurl.js, set the proxy URL (e.g. `libcurl.conf.ws` / your wisp proxy setting) to that URL.
 
+On a Wisp v2 client you can also pass credentials to authenticate, mirroring the server's `WISP_AUTH_USERNAME` / `WISP_AUTH_PASSWORD`:
+
+```js
+let conn = new WispConnection("wss://<your-worker>....workers.dev/", {
+  username: "alice",
+  password: "hunter2"
+});
+```
+
 ## Configuration
 
 Configuration is done via Worker environment variables, read from the `env` binding passed to the fetch handler (set them in `wrangler.toml` under `[vars]`, the Cloudflare dashboard, or `wrangler secret`):
@@ -44,8 +55,16 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `RATELIMIT_ENABLED`     | `false` | Enable the fixed-window rate limiter. |
 | `RATELIMIT_CONNECTIONS` | `30`    | Max new streams per IP per window.    |
 | `RATELIMIT_WINDOW`      | `60`    | Window length in seconds.             |
+| `STREAM_LIMIT_TOTAL`    | `50`    | Max concurrent streams per WebSocket connection. |
 | `ALLOW_LOOPBACK`        | `false` | `true` allows connections to loopback IPs. |
 | `ALLOW_PRIVATE`         | `false` | `true` allows connections to private IPs.  |
+| `HOSTNAME_BLACKLIST`    | *(empty)* | Comma-separated hostnames to refuse with `CLOSE 0x48` (matches the host and its subdomains). |
+| `PORT_BLACKLIST`        | *(empty)* | Comma-separated ports to refuse with `CLOSE 0x48`. |
+| `WISP_MOTD`             | *(none)* | Wisp v2 MOTD sent during the handshake. |
+| `WISP_AUTH_USERNAME`    | *(none)* | Enables Wisp v2 password auth; matching credentials are required. |
+| `WISP_AUTH_PASSWORD`    | *(none)* | The expected password (store via `wrangler secret`). |
+
+Both authentication variables must be set for auth to be enabled. Failed auth (`0xc0`/`0xc2`) and blocked destinations (`0x48`) end the stream/connection with the corresponding Wisp close reason.
 
 The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee.
 
@@ -57,6 +76,8 @@ The protocol core is unit-tested on plain node (no Cloudflare runtime needed). T
 npm test
 ```
 
+The suite covers the v1 flow, the v2 handshake (INFO exchange, version mismatch, extension negotiation, stream-open confirmation), password auth, blocklists, per-connection stream caps, backpressure and early data sent while a socket is still connecting.
+
 ## Routes
 
 - **`/` (with trailing slash)** — Wisp multiplexed WebSocket connection.
@@ -67,10 +88,10 @@ npm test
 
 ```
 src/
-  index.js      # WebSocket routing + fetch handler
+  index.js      # WebSocket routing (subprotocol selection) + fetch handler
   wisp.js       # WispConnection / WSProxyConnection (protocol core)
   net.js        # TCPConnection over connect() (default TCP connector)
-  util.js       # Wisp packet codec (<BI, <BH, <I, <B)
+  util.js       # Wisp packet codec + INFO/extension/auth helpers
   config.js     # runtime configuration, applied from the env binding
   ratelimit.js  # fixed-window rate limiter
 test/
@@ -99,7 +120,8 @@ WebSocket pricing on Workers counts **connections**, not messages: each WebSocke
 
 - Plain TCP only. UDP streams are not supported (`connect()`'s default connector is TCP; WARP would be needed for UDP and is not used), and outgoing TCP on port 25 is prohibited by Cloudflare.
 - The worker pins `binaryType = "arraybuffer"` before `accept()` so binary messages stay `ArrayBuffer` regardless of the `websocket_standard_binary_type` flag (Blob is the default from compat date 2026-03-17 and would break packet parsing). Single WebSocket frames are capped at 32 MiB by the platform — irrelevant here since Wisp fragments all data into small packets.
-- Hostnames are resolved on Cloudflare's edge by `connect()`, so loopback/private IP blocking only applies to IP literals in the CONNECT packet. The edge also refuses localhost, private and Cloudflare IPs regardless of this worker's config.
+- Hostnames are resolved on Cloudflare's edge by `connect()`, so loopback/private IP blocking only applies to IP literals in the CONNECT packet (the `HOSTNAME_BLACKLIST` applies to hostnames regardless). The edge also refuses localhost, private and Cloudflare IPs regardless of this worker's config.
+- Per-connection stream count is capped (`STREAM_LIMIT_TOTAL`, default 50; excess `CONNECT`s are refused with `CLOSE 0x49`).
 - WSProxy mode relays a single TCP stream per WebSocket by design (as in the Python server).
 
 ## Copyright

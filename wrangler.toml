@@ -12,12 +12,27 @@ assets = { directory = "./assets", binding = "ASSETS", run_worker_first = true }
 #   RATELIMIT_ENABLED       "true" to enable the fixed-window rate limiter.
 #   RATELIMIT_CONNECTIONS   max new streams per ip per window (default 30).
 #   RATELIMIT_WINDOW        window length in seconds (default 60).
+#   STREAM_LIMIT_TOTAL      max concurrent streams per websocket (default 50).
 #   ALLOW_LOOPBACK          "true" to allow connections to loopback ips.
 #   ALLOW_PRIVATE           "true" to allow connections to private ips.
+#   HOSTNAME_BLACKLIST      comma-separated hostnames to block (matches the
+#                           host and its subdomains), e.g. "internal.corp".
+#   PORT_BLACKLIST          comma-separated ports to block, e.g. "25,22".
+#   WISP_MOTD               wisp v2 MOTD shown to clients during the handshake.
+#   WISP_AUTH_USERNAME      wisp v2 password-auth username (enables auth).
+#   WISP_AUTH_PASSWORD      wisp v2 password-auth password (enables auth).
 #
 # [vars]
 # RATELIMIT_ENABLED = "true"
 # RATELIMIT_CONNECTIONS = "30"
 # RATELIMIT_WINDOW = "60"
+# STREAM_LIMIT_TOTAL = "50"
 # ALLOW_LOOPBACK = "false"
 # ALLOW_PRIVATE = "false"
+# HOSTNAME_BLACKLIST = "internal.corp"
+# PORT_BLACKLIST = "25,22"
+# WISP_MOTD = "Welcome to my wisp proxy!"
+#
+# [secrets]
+# WISP_AUTH_USERNAME = "alice"
+# WISP_AUTH_PASSWORD = "hunter2"
