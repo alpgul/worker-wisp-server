@@ -9,6 +9,7 @@
 
 import { connect } from "cloudflare:sockets"
 import { config } from "./config.js"
+import { HostBlockedError } from "./util.js"
 
 export function is_ip(addr_str) {
   //cloudflare sockets will do dns for us; only ip strings need validating
@@ -45,21 +46,35 @@ function ip_is_private(addr) {
   return false
 }
 
-//thrown when a connection is refused by our own policy (rather than the
-//remote end). maps to wisp close reason 0x42 like a failed connect.
-export function validate_hostname(host) {
+//validates a destination host against server policy. throws HostBlockedError
+//when the destination is blocked; this maps to wisp close reason 0x48.
+export function validate_hostname(host, port) {
+  //hostname blocklist: exact matches and subdomains ("corp.example.com")
+  let host_lower = host.toLowerCase()
+  for (let blocked of config.hostname_blocklist) {
+    let b = blocked.toLowerCase()
+    if (host_lower === b || host_lower.endsWith("." + b)) {
+      throw new HostBlockedError(`Connection to ${host} blocked by server policy.`)
+    }
+  }
+
+  //port blocklist
+  if (config.port_blocklist.includes(port)) {
+    throw new HostBlockedError(`Connection to port ${port} blocked by server policy.`)
+  }
+
   let addr = host
   if (addr.startsWith("::ffff:")) addr = addr.slice(7)
 
   //hostnames are resolved by the cloudflare edge when connect() runs, so we
   //can only validate ip literals here. production additionally refuses
-  //connections to localhost, private and cloudflare ips regardless of this.
+  //connections to loopback, private and cloudflare ips regardless of this.
   if (is_ip(host)) {
     if (config.block_loopback && ip_is_loopback(addr)) {
-      throw new TypeError("Connection to loopback ip address blocked.")
+      throw new HostBlockedError("Connection to loopback ip address blocked.")
     }
     if (config.block_private && ip_is_private(addr)) {
-      throw new TypeError("Connection to private ip address blocked.")
+      throw new HostBlockedError("Connection to private ip address blocked.")
     }
   }
   return host
@@ -75,7 +90,7 @@ export class TCPConnection {
     //note: warp connect() resolves dns on cloudflare's network, so hostnames
     //cannot be pre-resolved here. block_loopback/block_private only apply to
     //ip literals.
-    validate_hostname(hostname)
+    validate_hostname(hostname, port)
   }
 
   async connect() {

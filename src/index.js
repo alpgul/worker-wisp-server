@@ -5,6 +5,11 @@
 //the wisp protocol is exactly the same as the python server, so this worker is
 //a drop-in replacement for the backend of libcurl.js - just point the client
 //at wss://<your-worker>.workers.dev/ (keep the trailing slash).
+//
+//per the protocol spec, wisp v2 is used when the websocket upgrade request
+//carries a Sec-WebSocket-Protocol header; otherwise the connection acts as a
+//wisp v1 server. the client requests the "wisp-v2" subprotocol, which we echo
+//in the 101 response so the browser negotiates it successfully.
 
 import { WispConnection, WSProxyConnection } from "./wisp.js"
 import { apply_env as apply_config } from "./config.js"
@@ -19,7 +24,7 @@ function get_client_ip(request) {
   return ip
 }
 
-function handle_websocket(server, path, client_ip) {
+function handle_websocket(server, path, client_ip, wisp_version) {
   //pin binary frames to ArrayBuffer. with the websocket_standard_binary_type
   //flag (default on/after 2026-03-17) incoming binary messages arrive as Blob,
   //which our packet parsing (new Uint8Array(message.data)) cannot handle.
@@ -29,9 +34,8 @@ function handle_websocket(server, path, client_ip) {
 
   if (path.endsWith("/")) {
     //wisp multiplexed connection
-    let wisp_conn = new WispConnection(server, path, client_ip)
+    let wisp_conn = new WispConnection(server, path, client_ip, wisp_version)
     wisp_conn.setup()
-    inc_client_attr(client_ip, "streams")
 
     server.addEventListener("message", event => {
       wisp_conn.handle_ws_message(event)
@@ -70,6 +74,17 @@ function handle_websocket(server, path, client_ip) {
   }
 }
 
+//select the websocket subprotocol from the upgrade request. returns null for
+//plain v1 connections (no header at all) and rejects upgrades which offer
+//subprotocols we don't implement.
+function select_subprotocol(request) {
+  let header = request.headers.get("Sec-WebSocket-Protocol")
+  if (!header) return null
+  let offered = header.split(",").map(s => s.trim()).filter(s => s !== "")
+  if (offered.includes("wisp-v2")) return "wisp-v2"
+  return "unsupported"
+}
+
 export default {
   async fetch(request, env, ctx) {
     //read the per-deploy settings from the env binding and ensure the
@@ -82,11 +97,19 @@ export default {
     let upgrade = request.headers.get("Upgrade")
 
     if (upgrade && upgrade.toLowerCase() === "websocket") {
+      let subprotocol = select_subprotocol(request)
+      if (subprotocol === "unsupported") {
+        return new Response("unsupported websocket subprotocol", { status: 426 })
+      }
+
       let client_ip = get_client_ip(request)
       let pair = new WebSocketPair()
       let [client, server] = Object.values(pair)
-      handle_websocket(server, url.pathname, client_ip)
-      return new Response(null, { status: 101, webSocket: client })
+      //the presence of Sec-WebSocket-Protocol selects wisp v2; echo the chosen
+      //subprotocol in the 101 response
+      let headers = subprotocol ? { "Sec-WebSocket-Protocol": subprotocol } : {}
+      handle_websocket(server, url.pathname, client_ip, subprotocol ? 2 : 1)
+      return new Response(null, { status: 101, headers, webSocket: client })
     }
 
     //plain http request - content is served from the assets binding only.

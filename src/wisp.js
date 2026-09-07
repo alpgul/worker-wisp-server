@@ -1,26 +1,33 @@
-//a wisp v1 server connection, implemented as a websocket message handler.
-//this is a direct port of wisp-server-python's connection.py to the
-//cloudflare workers event model. instead of two asyncio infinite loops per
-//stream we use a queue pump (ws -> tcp) and a single long-running promise
-//(tcp -> ws), both of which are torn down in close_stream().
+//a wisp server connection, implemented as a websocket message handler. this
+//is a direct port of wisp-server-python's connection.py to the cloudflare
+//workers event model, extended with wisp v2 support (INFO handshake, extension
+//negotiation, password auth, MOTD, stream open confirmation) and per-connection
+//stream caps. instead of two asyncio infinite loops per stream we use a queue
+//pump (ws -> tcp) and a single long-running promise (tcp -> ws), both of which
+//are torn down in close_stream().
+//
+//a socket is wisp v2 when the client's websocket upgrade carried a
+//Sec-WebSocket-Protocol header (index.js selects the subprotocol and passes the
+//detected version in here); otherwise the legacy v1 flow is used.
 
 import { TCPConnection } from "./net.js"
 import {
   packet_types,
+  extension_ids,
+  close_reasons,
   queue_size,
   array_from_uint,
   uint_from_array,
   create_packet,
-  bytes_to_str
+  create_info_packet,
+  parse_extensions,
+  serialize_extensions,
+  parse_password_auth,
+  bytes_to_str,
+  HostBlockedError
 } from "./util.js"
 import { config } from "./config.js"
 import { ratelimit, get_client_attr, inc_client_attr } from "./ratelimit.js"
-
-//wisp close reason codes
-const REASON_NORMAL = 0x02
-const REASON_SOCKET_ERROR = 0x03
-const REASON_CONNECT_FAILED = 0x42
-const REASON_LIMITED = 0x49
 
 export class WSProxyConnection {
   constructor(ws, path) {
@@ -73,30 +80,90 @@ export class WSProxyConnection {
 }
 
 export class WispConnection {
-  constructor(ws, path, client_ip) {
+  constructor(ws, path, client_ip, wisp_version = 1) {
     this.ws = ws
     this.path = path
     this.client_ip = client_ip
+    this.wisp_version = wisp_version
     this.active_streams = {}
+    this.server_exts = {}
+    this.client_exts = {}
+    //v2 requires an INFO exchange before the opening CONTINUE(0); v1 skips it
+    this.handshake_done = wisp_version !== 2
   }
 
-  //send the initial CONTINUE packet
+  //start the connection: for v1 this just emits the opening CONTINUE. for v2,
+  //an INFO packet describing this server is sent and the opening CONTINUE is
+  //deferred until the client's INFO packet is received.
   setup() {
-    let continue_payload = array_from_uint(queue_size, 4)
-    let continue_packet = create_packet(packet_types.CONTINUE, 0, continue_payload)
-    this.ws.send(continue_packet)
+    if (this.wisp_version === 2) {
+      this.setup_wisp_v2()
+    } else {
+      this.send_continue_packet(0, queue_size)
+    }
+  }
+
+  //the extensions this server supports. udp is intentionally absent because
+  //workers cannot open udp sockets: a compliant v2 client then knows not to
+  //request udp streams.
+  build_server_extensions() {
+    let extensions = []
+    extensions.push({ id: extension_ids.STREAM_OPEN_CONFIRMATION, payload: new Uint8Array(0) })
+    if (config.wisp_motd) {
+      extensions.push({ id: extension_ids.MOTD, payload: new TextEncoder().encode(String(config.wisp_motd)) })
+    }
+    if (config.auth_username !== null && config.auth_username !== undefined &&
+        config.auth_password !== null && config.auth_password !== undefined) {
+      //payload [1] means password auth is required
+      extensions.push({ id: extension_ids.PASSWORD_AUTH, payload: array_from_uint(1, 1) })
+    }
+    return extensions
+  }
+
+  setup_wisp_v2() {
+    let server_extensions = this.build_server_extensions()
+    this.server_exts = {}
+    for (let ext of server_extensions) {
+      this.server_exts[ext.id] = ext
+    }
+    let info_packet = create_info_packet(this.wisp_version, 0, serialize_extensions(server_extensions))
+    this.ws.send(info_packet)
   }
 
   async new_stream(stream_id, payload) {
+    //stream info validation: [stream_type u8][port u16 le][hostname]
+    if (payload.length < 3) {
+      await this.send_close_packet(stream_id, close_reasons.INVALID_INFO)
+      this.close_stream(stream_id)
+      return
+    }
     let stream_type = payload[0]
-    let destination_port = uint_from_array(payload.slice(1, 3))
-    let hostname = bytes_to_str(payload.slice(3))
+    let destination_port = uint_from_array(payload.subarray(1, 3))
+    let hostname = bytes_to_str(payload.subarray(3))
+
+    if (stream_type !== 0x01 && stream_type !== 0x02) {
+      await this.send_close_packet(stream_id, close_reasons.INVALID_INFO)
+      this.close_stream(stream_id)
+      return
+    }
+    if (!hostname || destination_port < 1 || destination_port > 65535) {
+      await this.send_close_packet(stream_id, close_reasons.INVALID_INFO)
+      this.close_stream(stream_id)
+      return
+    }
+
+    //per-connection stream cap (the current stream's entry is already registered)
+    if (Object.keys(this.active_streams).length > config.stream_limit_total) {
+      await this.send_close_packet(stream_id, close_reasons.CONN_THROTTLED)
+      this.close_stream(stream_id)
+      return
+    }
 
     //rate limited
     if (ratelimit.enabled) {
       let stream_count = get_client_attr(this.client_ip, "streams")
       if (stream_count > ratelimit.connections_limit) {
-        await this.send_close_packet(stream_id, REASON_LIMITED)
+        await this.send_close_packet(stream_id, close_reasons.CONN_THROTTLED)
         this.close_stream(stream_id)
         return
       }
@@ -105,27 +172,41 @@ export class WispConnection {
     //info looks valid - try to open the connection now
     let connection = null
     try {
-      if (stream_type == 0x01) {
+      if (stream_type === 0x01) {
         connection = new TCPConnection(hostname, destination_port)
-      } else if (stream_type == 0x02) {
-        if (config.block_udp) throw new TypeError("UDP streams are not supported by this worker.")
       } else {
-        throw new TypeError("Invalid stream type.")
+        //udp is never negotiated (the extension is absent from our INFO
+        //packet), but guard against v1 clients or broken v2 clients anyway
+        if (config.block_udp) throw new HostBlockedError("UDP streams are not supported by this worker.")
       }
-      this.active_streams[stream_id].conn = connection
       await connection.connect()
     } catch (e) {
-      await this.send_close_packet(stream_id, REASON_CONNECT_FAILED)
+      //policy rejections map to HOST_BLOCKED (0x48); anything else came from
+      //the network layer and maps to UNREACHABLE_HOST (0x42)
+      let reason = e instanceof HostBlockedError ? close_reasons.HOST_BLOCKED : close_reasons.UNREACHABLE_HOST
+      await this.send_close_packet(stream_id, reason)
       this.close_stream(stream_id)
       return
     }
 
     //the client may have closed the stream while we were connecting
-    if (!this.active_streams[stream_id].closed) {
-      this.active_streams[stream_id].tcp_to_ws_task = this.stream_tcp_to_ws(stream_id)
-    } else {
+    if (this.active_streams[stream_id].closed) {
       connection.close().catch(() => {})
       return
+    }
+
+    //the socket is up: start the tcp -> ws pump and flush any ws data which
+    //arrived while connect() was pending (the client may send early data
+    //before the connect resolves)
+    this.active_streams[stream_id].conn = connection
+    this.active_streams[stream_id].tcp_to_ws_task = this.stream_tcp_to_ws(stream_id)
+    this.pump_stream(stream_id)
+
+    //stream open confirmation: when both sides support the 0x05 extension, a
+    //CONTINUE for this stream signals that the underlying socket is connected
+    if (this.client_exts[extension_ids.STREAM_OPEN_CONFIRMATION]) {
+      let buffer_remaining = queue_size - this.active_streams[stream_id].queue.length
+      this.send_continue_packet(stream_id, buffer_remaining)
     }
 
     inc_client_attr(this.client_ip, "streams")
@@ -164,9 +245,7 @@ export class WispConnection {
           stream.packets_sent += 1
           if (stream.packets_sent % (queue_size / 4) === 0) {
             let buffer_remaining = queue_size - stream.queue.length
-            let continue_payload = array_from_uint(buffer_remaining, 4)
-            let continue_packet = create_packet(packet_types.CONTINUE, stream_id, continue_payload)
-            await this.ws.send(continue_packet)
+            this.send_continue_packet(stream_id, buffer_remaining)
           }
         }
       } finally {
@@ -187,7 +266,7 @@ export class WispConnection {
         data = await stream.conn.recv()
       } catch (e) {
         //socket error
-        await this.send_close_packet(stream_id, REASON_SOCKET_ERROR)
+        await this.send_close_packet(stream_id, close_reasons.NETWORK_ERROR)
         this.close_stream(stream_id)
         return
       }
@@ -202,15 +281,69 @@ export class WispConnection {
       }
     }
 
-    await this.send_close_packet(stream_id, REASON_NORMAL)
+    await this.send_close_packet(stream_id, close_reasons.VOLUNTARY)
     this.close_stream(stream_id)
   }
 
+  send_continue_packet(stream_id, buffer_remaining) {
+    let continue_payload = array_from_uint(buffer_remaining, 4)
+    let continue_packet = create_packet(packet_types.CONTINUE, stream_id, continue_payload)
+    this.ws.send(continue_packet)
+  }
+
   async send_close_packet(stream_id, reason) {
-    if (!(stream_id in this.active_streams)) return
+    if (stream_id !== 0 && !(stream_id in this.active_streams)) return
     let close_payload = array_from_uint(reason, 1)
     let close_packet = create_packet(packet_types.CLOSE, stream_id, close_payload)
     await this.ws.send(close_packet)
+  }
+
+  //close the underlying websocket (used after a rejected v2 handshake)
+  terminate() {
+    try { this.ws.close() } catch (e) { /* ignore */ }
+  }
+
+  //handle the client's INFO packet (v2 handshake). accepted connections get an
+  //opening CONTINUE(0); rejected ones get a CLOSE(0) followed by a websocket
+  //close. the reason codes are defined in the protocol spec.
+  async handle_info(payload) {
+    if (payload.length < 2 || payload[0] !== this.wisp_version) {
+      await this.send_close_packet(0, close_reasons.INCOMPATIBLE_EXTENSIONS)
+      this.terminate()
+      return
+    }
+    let client_extensions = parse_extensions(payload.subarray(2))
+
+    //negotiate: only extensions both sides support may be used
+    this.client_exts = {}
+    for (let client_ext of client_extensions) {
+      if (this.server_exts[client_ext.id]) {
+        this.client_exts[client_ext.id] = client_ext
+      }
+    }
+
+    //password auth is verified here; the credentials arrive embedded in the
+    //client's extension list
+    if (this.server_exts[extension_ids.PASSWORD_AUTH]) {
+      let auth = null
+      let client_auth = client_extensions.find(ext => ext.id === extension_ids.PASSWORD_AUTH)
+      if (client_auth) {
+        auth = parse_password_auth(client_auth.payload)
+      }
+      if (!auth) {
+        await this.send_close_packet(0, close_reasons.AUTH_MISSING_CREDENTIALS)
+        this.terminate()
+        return
+      }
+      if (auth.username !== config.auth_username || auth.password !== config.auth_password) {
+        await this.send_close_packet(0, close_reasons.AUTH_BAD_PASSWORD)
+        this.terminate()
+        return
+      }
+    }
+
+    this.handshake_done = true
+    this.send_continue_packet(0, queue_size)
   }
 
   close_stream(stream_id) {
@@ -234,9 +367,20 @@ export class WispConnection {
     if (data.length < 5) return //packet too short
 
     //get basic packet info
-    let payload = data.slice(5)
+    let payload = data.subarray(5)
     let packet_type = data[0]
-    let stream_id = uint_from_array(data.slice(1, 5))
+    let stream_id = uint_from_array(data.subarray(1, 5))
+
+    //packets on stream 0 are part of the v2 handshake
+    if (stream_id === 0) {
+      if (this.wisp_version === 2 && !this.handshake_done) {
+        if (packet_type === packet_types.INFO) {
+          await this.handle_info(payload)
+        }
+        //everything else is dropped until the handshake completes
+      }
+      return
+    }
 
     if (packet_type == packet_types.CONNECT) {
       //create the stream entry before the async connect so DATA packets
@@ -250,7 +394,7 @@ export class WispConnection {
         closed: false,
         tcp_to_ws_task: null
       }
-      this.new_stream(stream_id, payload)
+      await this.new_stream(stream_id, payload)
     } else if (packet_type == packet_types.DATA) {
       await this.queue_ws_data(stream_id, payload)
     } else if (packet_type == packet_types.CLOSE) {
