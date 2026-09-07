@@ -14,7 +14,7 @@ import {
   bytes_to_str
 } from "./util.js"
 import { config } from "./config.js"
-import * as ratelimit from "./ratelimit.js"
+import { ratelimit, get_client_attr, inc_client_attr } from "./ratelimit.js"
 
 //wisp close reason codes
 const REASON_NORMAL = 0x02
@@ -94,7 +94,7 @@ export class WispConnection {
 
     //rate limited
     if (ratelimit.enabled) {
-      let stream_count = ratelimit.get_client_attr(this.client_ip, "streams")
+      let stream_count = get_client_attr(this.client_ip, "streams")
       if (stream_count > ratelimit.connections_limit) {
         await this.send_close_packet(stream_id, REASON_LIMITED)
         this.close_stream(stream_id)
@@ -128,7 +128,7 @@ export class WispConnection {
       return
     }
 
-    ratelimit.inc_client_attr(this.client_ip, "streams")
+    inc_client_attr(this.client_ip, "streams")
   }
 
   //ws -> tcp. data is queued and drained asynchronously. the queue is capped

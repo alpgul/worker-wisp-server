@@ -3,19 +3,61 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width">
-    <title>wisp-worker</title>
+    <title>libcurl.js TLS fingerprint test</title>
+    <script defer src="/libcurl.js" onload="libcurl.load_wasm('/libcurl.wasm');"></script>
     <style>
-      html { color-scheme: light dark; }
-      h1, p { font-family: sans-serif; }
-      body { max-width: 600px; margin-left: auto; margin-right: auto; }
-      pre { white-space: pre-wrap; }
+      body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 16px; }
+      pre { background: #f4f4f4; border: 1px solid #ccc; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+      #status { color: #555; }
+      #raw .curl_output { color: #888; }
+      button { padding: 6px 14px; font-size: 14px; cursor: pointer; }
     </style>
   </head>
   <body>
-    <h1>wisp-worker</h1>
-    <p>This is a <a href="https://github.com/MercuryWorkshop/wisp-protocol">Wisp protocol</a> server running on a Cloudflare Worker.</p>
-    <p>TCP traffic is relayed over Cloudflare's connect() API (all plans). UDP streams are not supported.</p>
-    <p>Point a Wisp client at the root path of this worker (<i>with</i> the trailing slash) to use it:</p>
-    <pre>wss://your-worker.your-subdomain.workers.dev/</pre>
+    <h1>libcurl.js TLS fingerprint test</h1>
+    <p id="status">Waiting for libcurl.js to load...</p>
+    <p>
+      <label for="url">URL:</label>
+      <input type="text" id="url" value="https://tls.browserleaks.com/" style="width: 360px;">
+      <button id="go">Request</button>
+    </p>
+    <h3>Raw curl output:</h3>
+    <pre id="raw"></pre>
+    <h3>Response body:</h3>
+    <pre id="body"></pre>
+
+    <script>
+      const ws_url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+      const statusEl = document.getElementById("status");
+      const rawEl = document.getElementById("raw");
+      const bodyEl = document.getElementById("body");
+
+      async function do_request() {
+        const url = document.getElementById("url").value;
+        rawEl.innerText = "";
+        bodyEl.innerText = "";
+        rawEl.innerText += `GET ${url}\n\n`;
+        try {
+          const r = await libcurl.fetch(url, {_libcurl_verbose: 1});
+          rawEl.innerText += `HTTP ${r.status} ${r.statusText}\ncontent-type: ${r.headers.get("content-type")}\n`;
+          let text = await r.text();
+          bodyEl.textContent = text;
+          statusEl.innerText = `Request finished. Body length: ${text.length} chars.`;
+        } catch (e) {
+          statusEl.innerText = "Error: " + e;
+          rawEl.innerText += "Error: " + e;
+        }
+      }
+
+      document.addEventListener("libcurl_load", () => {
+        libcurl.set_websocket(ws_url);
+        libcurl.stderr = (text) => { rawEl.innerText += text + "\n"; };
+        libcurl.stdout = (text) => { rawEl.innerText += text + "\n"; };
+        const ver = libcurl.version;
+        statusEl.innerText = `libcurl loaded (v${ver.lib}, curl ${ver.curl}, TLS ${ver.ssl}). Wisp proxy: ${ws_url}`;
+        document.title += " - ready";
+        document.getElementById("go").addEventListener("click", do_request);
+      });
+    </script>
   </body>
 </html>

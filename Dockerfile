@@ -11,6 +11,7 @@ RUN npm ci
 COPY wrangler.toml ./
 COPY src ./src
 COPY assets ./assets
+COPY entrypoint.sh ./
 
 EXPOSE 8787
-CMD ["npx", "wrangler", "dev", "--local", "--ip", "0.0.0.0", "--port", "8787"]
+CMD ["sh", "/app/entrypoint.sh"]

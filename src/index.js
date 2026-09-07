@@ -8,7 +8,7 @@
 
 import { WispConnection, WSProxyConnection } from "./wisp.js"
 import { apply_env as apply_config } from "./config.js"
-import * as ratelimit from "./ratelimit.js"
+import { ratelimit, get_client_attr, inc_client_attr, apply_env, start_cleanup } from "./ratelimit.js"
 
 function get_client_ip(request) {
   let ip = request.cf?.connectingIpAddress
@@ -31,7 +31,7 @@ function handle_websocket(server, path, client_ip) {
     //wisp multiplexed connection
     let wisp_conn = new WispConnection(server, path, client_ip)
     wisp_conn.setup()
-    ratelimit.inc_client_attr(client_ip, "streams")
+    inc_client_attr(client_ip, "streams")
 
     server.addEventListener("message", event => {
       wisp_conn.handle_ws_message(event)
@@ -47,14 +47,14 @@ function handle_websocket(server, path, client_ip) {
     })
   } else {
     //legacy wsproxy connection: /host:port relays a single tcp stream
-    let stream_count = ratelimit.get_client_attr(client_ip, "streams")
+    let stream_count = get_client_attr(client_ip, "streams")
     if (ratelimit.enabled && stream_count > ratelimit.connections_limit) {
       server.close()
       return
     }
 
     let wsproxy_conn = new WSProxyConnection(server, path)
-    ratelimit.inc_client_attr(client_ip, "streams")
+    inc_client_attr(client_ip, "streams")
     wsproxy_conn.setup_connection().then(() => {
       wsproxy_conn.handle_tcp()
     }).catch(() => {
@@ -75,8 +75,8 @@ export default {
     //read the per-deploy settings from the env binding and ensure the
     //rate limiter's periodic cleanup is running
     apply_config(env)
-    ratelimit.apply_env(env)
-    ratelimit.start_cleanup()
+    apply_env(env)
+    start_cleanup()
 
     let url = new URL(request.url)
     let upgrade = request.headers.get("Upgrade")
@@ -89,10 +89,18 @@ export default {
       return new Response(null, { status: 101, webSocket: client })
     }
 
-    //plain http request - content is served from the assets binding only
+    //plain http request - content is served from the assets binding only.
+    // / and /index.html always resolve to the landing page: the assets
+    // binding maps the root path to index.html, so normalize literal
+    // requests to the root instead of relying on the directory index.
     if (env.ASSETS) {
-      const asset = await env.ASSETS.fetch(request)
-      if (asset.ok) return asset
+      const url = new URL(request.url)
+      if (url.pathname === "/" || url.pathname === "/index.html") url.pathname = "/"
+      const asset = await env.ASSETS.fetch(new Request(url.toString(), request))
+      //an asset conditional request that still matches (If-None-Match /
+      //If-Modified-Since) comes back as 304, which is not asset.ok - pass it
+      //through so the browser can keep using its cached copy instead of 404
+      if (asset.ok || asset.status === 304) return asset
     }
     return new Response("404 not found", { status: 404 })
   }
