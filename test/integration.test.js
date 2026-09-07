@@ -248,6 +248,27 @@ test("stream data relays in both directions between the real pair", async () => 
   assert.deepEqual(h.errors, [])
 })
 
+test("data flows in both directions simultaneously (full duplex)", async () => {
+  const h = openPair({ wispVersion: 2 })
+  const stream = h.client.create_stream("example.com", 80)
+  await settled()
+  const tcp = Object.values(h.server.active_streams)[0].conn
+
+  let received = []
+  stream.addEventListener("message", (e) => received.push(decode(e.data)))
+
+  //interleave outbound and inbound without settling between each hop
+  for (let i = 1; i <= 5; i++) {
+    stream.send(encode("c" + i))
+    tcp._push(encode("s" + i))
+  }
+  await settled()
+
+  assert.deepEqual(tcp.sent.map(decode), ["c1", "c2", "c3", "c4", "c5"], "outbound reaches the socket in order")
+  assert.deepEqual(received, ["s1", "s2", "s3", "s4", "s5"], "inbound reaches the client in order")
+  assert.deepEqual(h.errors, [])
+})
+
 test("client-initiated close tears down the stream server-side", async () => {
   const h = openPair({ wispVersion: 2 })
   const stream = h.client.create_stream("example.com", 80)
