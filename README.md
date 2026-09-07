@@ -61,7 +61,7 @@ npm test
 
 - **`/` (with trailing slash)** — Wisp multiplexed WebSocket connection.
 - **`/host:port`** — legacy wsproxy mode, one WebSocket per TCP connection (raw relay).
-- **plain HTTP** — serves static files from `assets/` (`/`, `/browserleaks.html`, `/libcurl.js`, `/libcurl.wasm`, `/transport_ws.html`, each also reachable without the `.html` suffix). A small landing page is served at `/` as a fallback when the ASSETS binding is not configured.
+- **plain HTTP** — serves static files from the `assets/` binding (`/index.html`, the landing page); everything else is a 404.
 
 ## File layout
 
@@ -77,6 +77,8 @@ test/
   wisp.test.js        # unit tests for the protocol core (npm test)
   imports-loader.mjs  # node loader: worker imports -> test stubs
   stubs/              # in-memory fake net/config/ratelimit
+assets/
+  index.html          # landing page served at / 
 ```
 
 ## Behavior and limits

@@ -2,8 +2,7 @@ name = "wisp-worker"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
-# Serve static test assets (libcurl.js, libcurl.wasm, browserleaks.html, ...)
-# from the assets/ directory. Access in code via env.ASSETS.fetch().
+# Serve the landing page from the assets/ directory (env.ASSETS.fetch()).
 # run_worker_first keeps WebSocket upgrade requests (e.g. /) routed to the
 # worker instead of being served directly from the asset store.
 assets = { directory = "./assets", binding = "ASSETS", run_worker_first = true }

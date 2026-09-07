@@ -10,28 +10,6 @@ import { WispConnection, WSProxyConnection } from "./wisp.js"
 import { apply_env as apply_config } from "./config.js"
 import * as ratelimit from "./ratelimit.js"
 
-const default_html = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width">
-    <title>wisp-worker</title>
-    <style>
-      html { color-scheme: light dark; }
-      h1, p { font-family: sans-serif; }
-      body { max-width: 600px; margin-left: auto; margin-right: auto; }
-      pre { white-space: pre-wrap; }
-    </style>
-  </head>
-  <body>
-    <h1>wisp-worker</h1>
-    <p>This is a <a href="https://github.com/MercuryWorkshop/wisp-protocol">Wisp protocol</a> server running on a Cloudflare Worker.</p>
-    <p>TCP traffic is relayed over Cloudflare's connect() API (all plans). UDP streams are not supported.</p>
-    <p>Point a Wisp client at the root path of this worker (<i>with</i> the trailing slash) to use it:</p>
-    <pre>wss://your-worker.your-subdomain.workers.dev/</pre>
-  </body>
-</html>`
-
 function get_client_ip(request) {
   let ip = request.cf?.connectingIpAddress
   //honor the reverse proxy headers when we are behind one
@@ -111,16 +89,10 @@ export default {
       return new Response(null, { status: 101, webSocket: client })
     }
 
-    //plain http request - serve static assets first, then the landing page
-    let path = url.pathname
+    //plain http request - content is served from the assets binding only
     if (env.ASSETS) {
       const asset = await env.ASSETS.fetch(request)
       if (asset.ok) return asset
-    }
-    if (path === "/" || path === "/index.html") {
-      return new Response(default_html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" }
-      })
     }
     return new Response("404 not found", { status: 404 })
   }
