@@ -7,6 +7,7 @@
 //at wss://<your-worker>.workers.dev/ (keep the trailing slash).
 
 import { WispConnection, WSProxyConnection } from "./wisp.js"
+import { apply_env as apply_config } from "./config.js"
 import * as ratelimit from "./ratelimit.js"
 
 const default_html = `<!DOCTYPE html>
@@ -74,7 +75,8 @@ function handle_websocket(server, path, client_ip) {
       return
     }
 
-    let wsproxy_conn = new WSProxyConnection(server, path, client_ip)
+    let wsproxy_conn = new WSProxyConnection(server, path)
+    ratelimit.inc_client_attr(client_ip, "streams")
     wsproxy_conn.setup_connection().then(() => {
       wsproxy_conn.handle_tcp()
     }).catch(() => {
@@ -92,7 +94,10 @@ function handle_websocket(server, path, client_ip) {
 
 export default {
   async fetch(request, env, ctx) {
-    //ensure the rate limiter's periodic cleanup is running
+    //read the per-deploy settings from the env binding and ensure the
+    //rate limiter's periodic cleanup is running
+    apply_config(env)
+    ratelimit.apply_env(env)
     ratelimit.start_cleanup()
 
     let url = new URL(request.url)

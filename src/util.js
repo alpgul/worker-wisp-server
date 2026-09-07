@@ -62,11 +62,6 @@ export function create_packet(packet_type, stream_id, payload) {
   return concat_uint8array(packet_type_array, stream_id_array, payload)
 }
 
-//bytes from a utf-8 string
-export function str_to_bytes(str) {
-  return new TextEncoder().encode(str)
-}
-
 //utf-8 string from bytes
 export function bytes_to_str(bytes) {
   return new TextDecoder().decode(bytes)

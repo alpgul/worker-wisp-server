@@ -13,7 +13,7 @@ import {
   create_packet,
   bytes_to_str
 } from "./util.js"
-import { block_udp } from "./config.js"
+import { config } from "./config.js"
 import * as ratelimit from "./ratelimit.js"
 
 //wisp close reason codes
@@ -23,10 +23,9 @@ const REASON_CONNECT_FAILED = 0x42
 const REASON_LIMITED = 0x49
 
 export class WSProxyConnection {
-  constructor(ws, path, client_ip) {
+  constructor(ws, path) {
     this.ws = ws
     this.path = path
-    this.client_ip = client_ip
     this.conn = null
   }
 
@@ -109,7 +108,7 @@ export class WispConnection {
       if (stream_type == 0x01) {
         connection = new TCPConnection(hostname, destination_port)
       } else if (stream_type == 0x02) {
-        if (block_udp) throw new TypeError("UDP streams are not supported by this worker.")
+        if (config.block_udp) throw new TypeError("UDP streams are not supported by this worker.")
       } else {
         throw new TypeError("Invalid stream type.")
       }
@@ -123,7 +122,6 @@ export class WispConnection {
 
     //the client may have closed the stream while we were connecting
     if (!this.active_streams[stream_id].closed) {
-      this.active_streams[stream_id].type = stream_type
       this.active_streams[stream_id].tcp_to_ws_task = this.stream_tcp_to_ws(stream_id)
     } else {
       connection.close().catch(() => {})
@@ -245,7 +243,6 @@ export class WispConnection {
       //arriving immediately don't get dropped
       this.active_streams[stream_id] = {
         conn: null,
-        type: null,
         queue: [],
         waiters: [],
         packets_sent: 0,

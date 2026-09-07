@@ -8,7 +8,7 @@
 //it is only needed for UDP (not supported by this worker).
 
 import { connect } from "cloudflare:sockets"
-import { block_loopback, block_private } from "./config.js"
+import { config } from "./config.js"
 
 export function is_ip(addr_str) {
   //cloudflare sockets will do dns for us; only ip strings need validating
@@ -55,10 +55,10 @@ export function validate_hostname(host) {
   //can only validate ip literals here. production additionally refuses
   //connections to localhost, private and cloudflare ips regardless of this.
   if (is_ip(host)) {
-    if (block_loopback && ip_is_loopback(addr)) {
+    if (config.block_loopback && ip_is_loopback(addr)) {
       throw new TypeError("Connection to loopback ip address blocked.")
     }
-    if (block_private && ip_is_private(addr)) {
+    if (config.block_private && ip_is_private(addr)) {
       throw new TypeError("Connection to private ip address blocked.")
     }
   }
