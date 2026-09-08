@@ -91,7 +91,27 @@ The protocol core is unit-tested on plain node (no Cloudflare runtime needed). T
 npm test
 ```
 
-The suite covers the v1 flow, the v2 handshake (INFO exchange, version mismatch, extension negotiation, stream-open confirmation), password auth, blocklists, per-connection stream caps, backpressure, early data sent while a socket is still connecting, and the HTTP(S) hygiene policy (`308`/`426` on plain-text entry points, loopback exemption, `ENFORCE_HTTPS` toggle).
+The suite covers the v1 flow, the v2 handshake (INFO exchange, version mismatch, extension negotiation, stream-open confirmation), password auth, blocklists, per-connection stream caps, backpressure, early data sent while a socket is still connecting, the HTTP(S) hygiene policy (`308`/`426` on plain-text entry points, loopback exemption, `ENFORCE_HTTPS` toggle), and the state counters behind `/__metrics`.
+
+## Metrics
+
+`GET /__metrics` returns a small prometheus-style text summary of the current isolate's runtime state:
+
+```text
+# libcurl.js worker metrics
+libcurl_connections_total 0
+libcurl_streams_opened_total 0
+libcurl_streams_closed_total 0
+libcurl_bytes_ws_to_tcp_total 0
+libcurl_packets_ws_to_tcp_total 0
+libcurl_bytes_tcp_to_ws_total 0
+libcurl_packets_tcp_to_ws_total 0
+libcurl_downstream_stalls_total 0
+libcurl_out_queue_max 0
+libcurl_closes_total{reason="0x0f"} 0
+```
+
+Counters are per-isolate and in-memory (isolates are ephemeral), so sample them over short windows; `?reset=1` zeroes the counters to start a clean observation window. Other HTTP methods get a `405`. The endpoint sits behind the HTTPS policy, so production reaches it over `https://<worker>/__metrics`.
 
 ## Routes
 
@@ -109,6 +129,7 @@ src/
   util.js       # Wisp packet codec + INFO/extension/auth helpers
   config.js     # runtime configuration, applied from the env binding
   ratelimit.js  # fixed-window rate limiter
+  metrics.js    # per-isolate runtime counters (state, snapshot, render)
 test/
   wisp.test.js        # unit tests for the protocol core (npm test)
   imports-loader.mjs  # node loader: worker imports -> test stubs

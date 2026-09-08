@@ -14,6 +14,7 @@
 import { WispConnection, WSProxyConnection } from "./wisp.js"
 import { apply_env as apply_config, config } from "./config.js"
 import { ratelimit, get_client_attr, inc_client_attr, apply_env, start_cleanup } from "./ratelimit.js"
+import { metrics, reset as reset_metrics, render as render_metrics } from "./metrics.js"
 
 //tls hygiene policy. returns null when the request may proceed, otherwise a
 //Response that short-circuits it.
@@ -135,6 +136,7 @@ export default {
       }
 
       let client_ip = get_client_ip(request)
+      metrics.inc("connections_total")
       let pair = new WebSocketPair()
       let [client, server] = Object.values(pair)
       //the presence of Sec-WebSocket-Protocol selects wisp v2; echo the chosen
@@ -142,6 +144,19 @@ export default {
       let headers = subprotocol ? { "Sec-WebSocket-Protocol": subprotocol } : {}
       handle_websocket(server, url.pathname, client_ip, subprotocol ? 2 : 1)
       return new Response(null, { status: 101, headers, webSocket: client })
+    }
+
+    //lightweight metrics endpoint (prometheus-ish text). counters are
+    //per-isolate, so use `?reset=1` to start a clean observation window.
+    //https_policy() runs before this so production reaches it over https.
+    if (url.pathname === "/__metrics") {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("method not allowed", { status: 405 })
+      }
+      if (url.searchParams.get("reset") === "1") reset_metrics()
+      return new Response(render_metrics(), {
+        headers: { "content-type": "text/plain; charset=utf-8" }
+      })
     }
 
     //plain http request - content is served from the assets binding only.

@@ -28,6 +28,7 @@ import {
 } from "./util.js"
 import { config } from "./config.js"
 import { ratelimit, get_client_attr, inc_client_attr } from "./ratelimit.js"
+import { metrics } from "./metrics.js"
 
 export class WSProxyConnection {
   constructor(ws, path) {
@@ -201,6 +202,7 @@ export class WispConnection {
     this.active_streams[stream_id].conn = connection
     this.active_streams[stream_id].tcp_to_ws_task = this.stream_tcp_to_ws(stream_id)
     this.pump_stream(stream_id)
+    metrics.inc("streams_opened_total")
 
     //stream open confirmation: when both sides support the 0x05 extension, a
     //CONTINUE for this stream signals that the underlying socket is connected
@@ -220,6 +222,8 @@ export class WispConnection {
   async queue_ws_data(stream_id, data) {
     let stream = this.active_streams[stream_id]
     if (!stream || stream.closed) return
+    metrics.add("bytes_ws_to_tcp_total", data.length)
+    metrics.inc("packets_ws_to_tcp_total")
     while (stream.queue.length >= queue_size && !stream.closed) {
       await new Promise(resolve => stream.waiters.push(resolve))
     }
@@ -278,10 +282,16 @@ export class WispConnection {
 
       if (data.length === 0) break //connection closed
 
+      metrics.add("bytes_tcp_to_ws_total", data.length)
+      metrics.inc("packets_tcp_to_ws_total")
+
       //stop reading the socket while the downstream queue is full: this both
       //bounds our memory and lets tcp backpressure reach the remote producer
       while (config.downstream_buffer > 0 && stream.out_queue.length >= config.downstream_buffer && !stream.closed) {
-        if (!stream.stalled_at) stream.stalled_at = Date.now()
+        if (!stream.stalled_at) {
+          stream.stalled_at = Date.now()
+          metrics.inc("downstream_stalls_total")
+        }
         let timed_out = await new Promise(resolve => {
           let hold = setTimeout(() => resolve(true), config.downstream_stall_timeout)
           stream.out_waiters.push(() => { clearTimeout(hold); resolve(false) })
@@ -298,6 +308,7 @@ export class WispConnection {
 
       let data_packet = create_packet(packet_types.DATA, stream_id, data)
       stream.out_queue.push(data_packet)
+      metrics.observe_out_queue(stream.out_queue.length)
       this.drain_downstream(stream_id)
     }
 
@@ -341,6 +352,7 @@ export class WispConnection {
     if (stream_id !== 0 && !(stream_id in this.active_streams)) return
     let close_payload = array_from_uint(reason, 1)
     let close_packet = create_packet(packet_types.CLOSE, stream_id, close_payload)
+    metrics.record_close(reason)
     await this.ws.send(close_packet)
   }
 
@@ -410,6 +422,7 @@ export class WispConnection {
     if (!(stream_id in this.active_streams)) return //stream already closed
     let stream = this.active_streams[stream_id]
     stream.closed = true
+    metrics.inc("streams_closed_total")
     //wake up any queue_ws_data calls blocked on a full queue
     while (stream.waiters.length > 0) stream.waiters.shift()()
     //wake up tcp readers blocked on a full downstream buffer

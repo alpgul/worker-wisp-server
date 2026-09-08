@@ -81,3 +81,23 @@ test("fetch: unsupported subprotocol over plain http reports the http problem fi
   const res = await worker.fetch(upgradeRequest("http://example.com/wisp/", { headers: { "Sec-WebSocket-Protocol": "bogus" } }), {})
   assert.equal(res.status, 426)
 })
+
+test("fetch: /__metrics serves counter text and resets on demand", async () => {
+  const res = await worker.fetch(new Request("https://example.com/__metrics"), {})
+  assert.equal(res.status, 200)
+  assert.match(res.headers.get("content-type"), /text\/plain/)
+  const body = await res.text()
+  assert.match(body, /libcurl_connections_total 0/)
+  assert.match(body, /libcurl_streams_opened_total 0/)
+  assert.match(body, /# libcurl.js worker metrics/)
+
+  const res2 = await worker.fetch(new Request("https://example.com/__metrics?reset=1"), {})
+  assert.equal(res2.status, 200)
+  const body2 = await res2.text()
+  assert.match(body2, /libcurl_streams_opened_total 0/)
+})
+
+test("fetch: /__metrics rejects non-GET methods", async () => {
+  const res = await worker.fetch(new Request("https://example.com/__metrics", { method: "POST" }), {})
+  assert.equal(res.status, 405)
+})
