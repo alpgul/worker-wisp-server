@@ -12,6 +12,7 @@ import vm from "node:vm"
 import fs from "node:fs"
 
 import { WispConnection as ServerWispConnection } from "../src/wisp.js"
+import { queue_size } from "../src/util.js"
 import { config } from "./stubs/config.js"
 
 const wisp_source = fs.readFileSync(new URL("../../../client/wisp_client/wisp.js", import.meta.url), "utf8")
@@ -215,7 +216,7 @@ test("v2 handshake between the real client and real server negotiates extensions
 
   assert.equal(h.client.connected, true, "client opens after CONTINUE(0)")
   assert.equal(h.client.wisp_version, 2, "v2 stays negotiated")
-  assert.equal(h.client.max_buffer_size, 128, "opening CONTINUE carries the server's queue size")
+  assert.equal(h.client.max_buffer_size, queue_size, "opening CONTINUE carries the server's queue size")
   assert.equal(h.client.server_motd, "welcome", "client reads the server's MOTD extension")
   assert.equal(h.client.udp_enabled, false, "udp is not negotiated (the server does not advertise it)")
 

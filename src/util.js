@@ -52,7 +52,11 @@ export const close_reasons = {
   AUTH_MISSING_CREDENTIALS: 0xc2
 }
 
-export const queue_size = 128
+//per-stream flow-control window, in packets. this is both the credit granted
+//(CONTINUE(0) at open, CONTINUE(stream) as data drains) and the internal queue
+//backpressure threshold. larger windows mean fewer CONTINUE round trips per
+//RTT at the cost of memory per stream.
+export const queue_size = 512
 
 //thrown when a connection is refused by server policy (blocklist / protected
 //address / unsupported stream type). maps to close reason 0x48 HOST_BLOCKED.

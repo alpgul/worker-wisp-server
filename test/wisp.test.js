@@ -11,12 +11,10 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 
 import { WispConnection } from "../src/wisp.js"
-import { create_packet, array_from_uint, create_info_packet, serialize_extensions, bytes_to_str } from "../src/util.js"
+import { create_packet, array_from_uint, create_info_packet, serialize_extensions, bytes_to_str, queue_size } from "../src/util.js"
 import { config } from "./stubs/config.js"
 import { ratelimit } from "./stubs/ratelimit.js"
 import { TCPConnection } from "./stubs/net.js"
-
-const queue_size = 128
 
 //fake websocket that records everything sent to the client
 function makeWs() {
@@ -279,10 +277,10 @@ test("backpressure caps the send queue at queue_size without losing data", async
   await wisp.handle_ws_message(msg(connectPacket(7, "example.com", 80)))
   await tick()
   const stream = streamOf(wisp, 7)
-  stream.conn._sendDelay = 25 //remote is slow; the pump cannot drain fast
+  stream.conn._sendDelay = 2 //remote is slow; the pump cannot drain fast
 
   const payload = new Uint8Array(100).fill(0x41)
-  const TOTAL = 150
+  const TOTAL = queue_size + 40
   for (let i = 0; i < TOTAL; i++) {
     wisp.queue_ws_data(7, payload) //not awaited: producer outruns the pump
   }
@@ -294,7 +292,7 @@ test("backpressure caps the send queue at queue_size without losing data", async
     await tick(5)
   }
   assert.ok(max <= queue_size, `queue never exceeds queue_size (max=${max})`)
-  assert.ok(max > queue_size / 2, `backpressure actually engaged (max=${max} > 64)`)
+  assert.ok(max > queue_size / 2, `backpressure actually engaged (max=${max} > ${queue_size / 2})`)
 
   const deadline = Date.now() + 8000
   while (stream.conn.sent.length < TOTAL && Date.now() < deadline) {
@@ -352,16 +350,16 @@ test("CONTINUE packets are emitted for flow control", async () => {
   await tick()
   const stream = streamOf(wisp, 10)
 
-  //send enough packets to cross the queue_size/4 = 32 threshold
+  //send enough packets to cross the queue_size/4 threshold
   const payload = new Uint8Array(10)
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < queue_size / 2 + 20; i++) {
     await wisp.queue_ws_data(10, payload)
     await tick(0)
   }
   await tick()
 
   const continues = ws.handler.msgs.filter(m => m[0] === 0x03 && (m[1] | (m[2] << 8)) === 10)
-  assert.ok(continues.length >= 1, "CONTINUE packet(s) sent after 32 queued packets")
+  assert.ok(continues.length >= 1, "CONTINUE packet(s) sent after queue_size/4 queued packets")
 })
 
 test("wisp v2 handshake: INFO first, CONTINUE only after the client's INFO", async () => {
