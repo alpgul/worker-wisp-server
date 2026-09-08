@@ -10,5 +10,7 @@ export const config = {
   wisp_motd: null,
   auth_username: null,
   auth_password: null,
-  enforce_https: false
+  enforce_https: false,
+  downstream_buffer: 512,
+  downstream_stall_timeout: 10000
 }

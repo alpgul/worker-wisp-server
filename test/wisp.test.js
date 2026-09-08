@@ -103,7 +103,7 @@ test("handshake sends one CONTINUE packet with queue_size", async () => {
   const p = ws.handler.msgs[0]
   assert.equal(p[0], 0x03, "packet type is CONTINUE")
   assert.equal(p[1] | (p[2] << 8), 0, "stream_id is 0")
-  assert.deepEqual(Array.from(p.slice(5)), Array.from(array_from_uint(queue_size, 4)), "payload is queue_size=128")
+  assert.deepEqual(Array.from(p.slice(5)), Array.from(array_from_uint(queue_size, 4)), `payload is queue_size=${queue_size}`)
 })
 
 test("stream connect + bidirectional data relay", async () => {
@@ -629,5 +629,118 @@ test("client data sent while the socket is still connecting is delivered", async
     assert.equal(delivered, true, "early data reached the remote socket after connect")
   } finally {
     TCPConnection.prototype.connect = orig
+  }
+})
+
+//a fake ws whose send() is slow until _slow is cleared, simulating a
+//downstream client that stalls consuming DATA frames
+function makeSlowClientWs(delayMs) {
+  const ws = makeWs()
+  ws._slow = true
+  ws.send = async bytes => {
+    if (ws._slow) await new Promise(r => setTimeout(r, delayMs))
+    ws.handler.msgs.push(new Uint8Array(bytes))
+  }
+  return ws
+}
+
+function connectStalled(wisp, id) {
+  return wisp.handle_ws_message(msg(connectPacket(id, "example.com", 80)))
+}
+
+test("downstream queue is bounded: a slow client stalls the tcp reader", async () => {
+  const origBuffer = config.downstream_buffer
+  const origTimeout = config.downstream_stall_timeout
+  config.downstream_buffer = 5
+  config.downstream_stall_timeout = 60000 //long: we only assert the bound
+  try {
+    const ws = makeSlowClientWs(20)
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await connectStalled(wisp, 1)
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    //remote producer dumps many chunks faster than the slow client consumes
+    const blob = new TextEncoder().encode("x".repeat(10))
+    for (let i = 0; i < 100; i++) stream.conn._push(blob)
+    await tick(200)
+
+    assert.ok(stream.out_queue.length <= config.downstream_buffer,
+      `out_queue never exceeds the cap (len=${stream.out_queue.length})`)
+    assert.ok(stream.conn.recv_queue.length > 0,
+      "tcp reader stopped while the buffer is full (recv_queue backlog left)")
+    wisp.close_all()
+  } finally {
+    config.downstream_buffer = origBuffer
+    config.downstream_stall_timeout = origTimeout
+  }
+})
+
+test("stalled downstream client: stream is proactively closed with 0x03", async () => {
+  const origBuffer = config.downstream_buffer
+  const origTimeout = config.downstream_stall_timeout
+  config.downstream_buffer = 3
+  config.downstream_stall_timeout = 100
+  try {
+    const ws = makeSlowClientWs(40)
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await connectStalled(wisp, 1)
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    const blob = new TextEncoder().encode("x".repeat(10))
+    for (let i = 0; i < 20; i++) stream.conn._push(blob)
+
+    let closed = false
+    const deadline = Date.now() + 3000
+    while (!closed && Date.now() < deadline) {
+      const close = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1 && m[5] === 0x03)
+      closed = !!close
+      await tick(20)
+    }
+    assert.ok(closed, "stalled stream is closed proactively")
+    assert.equal(stream.closed, true, "stream entry is torn down")
+  } finally {
+    config.downstream_buffer = origBuffer
+    config.downstream_stall_timeout = origTimeout
+  }
+})
+
+test("draining a stalled stream resumes delivery without closing", async () => {
+  const origBuffer = config.downstream_buffer
+  const origTimeout = config.downstream_stall_timeout
+  config.downstream_buffer = 3
+  config.downstream_stall_timeout = 60000
+  try {
+    const ws = makeSlowClientWs(40)
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await connectStalled(wisp, 1)
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    const blob = new TextEncoder().encode("abc")
+    for (let i = 0; i < 30; i++) stream.conn._push(blob)
+    await tick()
+
+    //client starts consuming fast again
+    ws._slow = false
+
+    let delivered = false
+    const deadline = Date.now() + 3000
+    while (!delivered && Date.now() < deadline) {
+      await tick(10)
+      const dataMsgs = ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1)
+      delivered = dataMsgs.reduce((n, m) => n + m.length - 5, 0) === 30 * 3
+    }
+    assert.ok(delivered, "all 30 remote chunks reached the client after draining")
+    assert.equal(stream.closed, false, "stream was not closed by the stall")
+    assert.equal(stream.stalled_at, null, "stall flag resets once the queue drains")
+    wisp.close_all()
+  } finally {
+    config.downstream_buffer = origBuffer
+    config.downstream_stall_timeout = origTimeout
   }
 })

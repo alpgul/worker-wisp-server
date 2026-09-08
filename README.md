@@ -66,6 +66,8 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `WISP_AUTH_USERNAME`    | *(none)* | Enables Wisp v2 password auth; matching credentials are required. |
 | `WISP_AUTH_PASSWORD`    | *(none)* | The expected password (store via `wrangler secret`). |
 | `ENFORCE_HTTPS`         | `true` | Refuse plain-text entry points: `ws://` upgrades get `426` (browsers do not follow redirects on upgrades) and `http://` page loads get a `308` redirect to `https://`. `localhost`/loopback is always exempt so the local dev server keeps working. |
+| `DOWNSTREAM_BUFFER`     | `512` | Max tcp→ws DATA packets buffered per stream before the downstream (client) is considered stalled. `0` disables the bound (direct unbounded sends). |
+| `DOWNSTREAM_STALL_TIMEOUT` | `10000` | How long (ms) a full downstream buffer may persist before the stream is proactively closed with `0x03`. |
 
 Both authentication variables must be set for auth to be enabled. Failed auth (`0xc0`/`0xc2`) and blocked destinations (`0x48`) end the stream/connection with the corresponding Wisp close reason.
 
@@ -74,6 +76,10 @@ Both authentication variables must be set for auth to be enabled. Failed auth (`
 Credentials and traffic must never cross the network in clear text, so production is assumed to be served behind TLS: point clients at `wss://<your-worker>....workers.dev/`. By default the worker enforces this — set `ENFORCE_HTTPS=false` only for private, HTTP-only deployments (e.g. a LAN test server).
 
 > Password-auth wire format: the v2 protocol spec omits the password length, but the reference implementation ([wisp-js](https://github.com/wasm-libcurl/wisp-js)) sends a `u16` password length in the client credentials. This worker follows the wisp-js layout (`[username_len u8][password_len u16 LE][username][password]`) for interoperability.
+
+### Slow downstream clients
+
+Wisp only has client→server flow control (CONTINUE credits); there is no way for the server to tell a client to slow down. A client that stops consuming would otherwise fill Cloudflare's websocket buffers until the connection dies with a late, unexplained error. The worker instead keeps a bounded per-stream outbound queue (`DOWNSTREAM_BUFFER`): the TCP reader pauses while it is full (TCP backpressure reaches the remote producer), and if the queue stays full past `DOWNSTREAM_STALL_TIMEOUT` the stream is proactively closed with `0x03`.
 
 The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee.
 

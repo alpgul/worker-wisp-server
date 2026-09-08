@@ -30,7 +30,16 @@ const config = {
   //when true, plain-text entry points are refused: websocket upgrades over
   //insecure schemes get 426 and plain http page loads redirect to https.
   //localhost/loopback is always exempt so the local dev server keeps working.
-  enforce_https: true
+  enforce_https: true,
+  //max tcp->ws DATA packets buffered per stream before we declare the
+  //downstream (client) stalled. 0 disables the bound (unbuffered direct send).
+  downstream_buffer: 512,
+  //how long a full downstream queue may persist before the client is
+  //considered stuck and the stream is proactively closed with 0x03. wisp has
+  //no server->client flow control, so without this a stalled client fills
+  //cloudflare's ws buffers and the connection dies with a late, unexplained
+  //NETWORK_ERROR instead.
+  downstream_stall_timeout: 10000
 }
 
 function env_bool(env, name, default_value) {
@@ -72,6 +81,8 @@ export function apply_env(env) {
   config.auth_username = env_str(env, "WISP_AUTH_USERNAME", null)
   config.auth_password = env_str(env, "WISP_AUTH_PASSWORD", null)
   config.enforce_https = env_bool(env, "ENFORCE_HTTPS", true)
+  config.downstream_buffer = env_num(env, "DOWNSTREAM_BUFFER", 512)
+  config.downstream_stall_timeout = env_num(env, "DOWNSTREAM_STALL_TIMEOUT", 10000)
 }
 
 export { config }

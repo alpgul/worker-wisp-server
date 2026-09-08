@@ -256,7 +256,12 @@ export class WispConnection {
     })()
   }
 
-  //tcp -> ws
+  //tcp -> ws. data is queued into a bounded per-stream buffer and drained by
+  //drain_downstream(). wisp has no server->client flow control, so when the
+  //client stops consuming we cannot slow it down with credits; instead the
+  //buffer fills and, if it stays full past downstream_stall_timeout, the
+  //stream is proactively closed with 0x03. this replaces cloudflare's
+  //unexplained platform backstop (a dead connection at ~the ws send buffer).
   async stream_tcp_to_ws(stream_id) {
     let stream = this.active_streams[stream_id]
     if (!stream) return
@@ -273,16 +278,57 @@ export class WispConnection {
 
       if (data.length === 0) break //connection closed
 
-      let data_packet = create_packet(packet_types.DATA, stream_id, data)
-      try {
-        await this.ws.send(data_packet)
-      } catch (e) {
-        break
+      //stop reading the socket while the downstream queue is full: this both
+      //bounds our memory and lets tcp backpressure reach the remote producer
+      while (config.downstream_buffer > 0 && stream.out_queue.length >= config.downstream_buffer && !stream.closed) {
+        if (!stream.stalled_at) stream.stalled_at = Date.now()
+        let timed_out = await new Promise(resolve => {
+          let hold = setTimeout(() => resolve(true), config.downstream_stall_timeout)
+          stream.out_waiters.push(() => { clearTimeout(hold); resolve(false) })
+        })
+        if (timed_out) {
+          //the client is not draining; drop the stream instead of buffering forever
+          await this.send_close_packet(stream_id, close_reasons.NETWORK_ERROR)
+          this.close_stream(stream_id)
+          return
+        }
+        if (stream.closed) return
       }
+      if (stream.closed) return
+
+      let data_packet = create_packet(packet_types.DATA, stream_id, data)
+      stream.out_queue.push(data_packet)
+      this.drain_downstream(stream_id)
     }
 
     await this.send_close_packet(stream_id, close_reasons.VOLUNTARY)
     this.close_stream(stream_id)
+  }
+
+  //drain the bounded tcp->ws buffer. a full buffer marks the stream as
+  //stalled; once the queue drops below the cap the stall resets and any
+  //blocked tcp reader is woken.
+  drain_downstream(stream_id) {
+    let stream = this.active_streams[stream_id]
+    if (!stream || stream.out_draining) return
+    stream.out_draining = true
+    ;(async () => {
+      try {
+        while (stream.out_queue.length > 0 && !stream.closed) {
+          let packet = stream.out_queue.shift()
+          if (stream.out_queue.length < config.downstream_buffer) stream.stalled_at = null
+          try {
+            await this.ws.send(packet)
+          } catch (e) {
+            break //the websocket is dying; stream teardown happens upstream
+          }
+        }
+      } finally {
+        stream.out_draining = false
+        //wake up any tcp readers blocked on a full buffer now that it drained
+        while (stream.out_waiters.length > 0) stream.out_waiters.shift()()
+      }
+    })()
   }
 
   send_continue_packet(stream_id, buffer_remaining) {
@@ -366,6 +412,9 @@ export class WispConnection {
     stream.closed = true
     //wake up any queue_ws_data calls blocked on a full queue
     while (stream.waiters.length > 0) stream.waiters.shift()()
+    //wake up tcp readers blocked on a full downstream buffer
+    while (stream.out_waiters.length > 0) stream.out_waiters.shift()()
+    stream.stalled_at = null
     if (stream.conn) {
       stream.conn.close().catch(() => {})
     }
@@ -406,7 +455,12 @@ export class WispConnection {
         packets_sent: 0,
         draining: false,
         closed: false,
-        tcp_to_ws_task: null
+        tcp_to_ws_task: null,
+        //bounded tcp->ws downstream buffer (see drain_downstream)
+        out_queue: [],
+        out_waiters: [],
+        out_draining: false,
+        stalled_at: null
       }
       await this.new_stream(stream_id, payload)
     } else if (packet_type == packet_types.DATA) {
