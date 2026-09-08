@@ -34,21 +34,82 @@ catch (e) {
 };ws.binaryType="arraybuffer"}catch(e){throw new FS.ErrnoError(23)}}var peer={addr,port,socket:ws,msg_send_queue:[]};SOCKFS.websocket_sock_ops.addPeer(sock,peer);SOCKFS.websocket_sock_ops.handlePeerEvents(sock,peer);if(sock.type===2&&typeof sock.sport!="undefined"){peer.msg_send_queue.push(new Uint8Array([255,255,255,255,"p".charCodeAt(0),"o".charCodeAt(0),"r".charCodeAt(0),"t".charCodeAt(0),(sock.sport&65280)>>8,sock.sport&255]))}return peer},getPeer(sock,addr,port){return sock.peers[addr+":"+port]},addPeer(sock,peer){sock.peers[peer.addr+":"+peer.port]=peer},removePeer(sock,peer){delete sock.peers[peer.addr+":"+peer.port]},handlePeerEvents(sock,peer){var first=true;var handleOpen=function(){sock.connecting=false;SOCKFS.emit("open",sock.stream.fd);try{var queued=peer.msg_send_queue.shift();while(queued){peer.socket.send(queued);queued=peer.msg_send_queue.shift()}}catch(e){peer.socket.close()}};function handleMessage(data){if(typeof data=="string"){var encoder=new TextEncoder;data=encoder.encode(data)}else{assert(data.byteLength!==undefined);if(data.byteLength==0){return}data=new Uint8Array(data)}var wasfirst=first;first=false;if(wasfirst&&data.length===10&&data[0]===255&&data[1]===255&&data[2]===255&&data[3]===255&&data[4]==="p".charCodeAt(0)&&data[5]==="o".charCodeAt(0)&&data[6]==="r".charCodeAt(0)&&data[7]==="t".charCodeAt(0)){var newport=data[8]<<8|data[9];SOCKFS.websocket_sock_ops.removePeer(sock,peer);peer.port=newport;SOCKFS.websocket_sock_ops.addPeer(sock,peer);return}sock.recv_queue.push({addr:peer.addr,port:peer.port,data});SOCKFS.emit("message",sock.stream.fd)}if(ENVIRONMENT_IS_NODE){peer.socket.on("open",handleOpen);peer.socket.on("message",function(data,isBinary){if(!isBinary){return}handleMessage(new Uint8Array(data).buffer)});peer.socket.on("close",function(){SOCKFS.emit("close",sock.stream.fd)});peer.socket.on("error",function(error){sock.error=14;SOCKFS.emit("error",[sock.stream.fd,sock.error,"ECONNREFUSED: Connection refused"])})}else{peer.socket.onopen=handleOpen;peer.socket.onclose=function(){SOCKFS.emit("close",sock.stream.fd)};peer.socket.onmessage=function peer_socket_onmessage(event){handleMessage(event.data)};peer.socket.onerror=function(error){sock.error=14;SOCKFS.emit("error",[sock.stream.fd,sock.error,"ECONNREFUSED: Connection refused"])}}},poll(sock){if(sock.type===1&&sock.server){return sock.pending.length?64|1:0}var mask=0;var dest=sock.type===1?SOCKFS.websocket_sock_ops.getPeer(sock,sock.daddr,sock.dport):null;if(sock.recv_queue.length||!dest||dest&&dest.socket.readyState===dest.socket.CLOSING||dest&&dest.socket.readyState===dest.socket.CLOSED){mask|=64|1}if(!dest||dest&&dest.socket.readyState===dest.socket.OPEN){mask|=4}if(dest&&dest.socket.readyState===dest.socket.CLOSING||dest&&dest.socket.readyState===dest.socket.CLOSED){if(sock.connecting){mask|=4}else{mask|=16}}return mask},ioctl(sock,request,arg){switch(request){case 21531:var bytes=0;if(sock.recv_queue.length){bytes=sock.recv_queue[0].data.length}HEAP32[arg>>2]=bytes;return 0;default:return 28}},close(sock){if(sock.server){try{sock.server.close()}catch(e){}sock.server=null}var peers=Object.keys(sock.peers);for(var i=0;i<peers.length;i++){var peer=sock.peers[peers[i]];try{peer.socket.close()}catch(e){}SOCKFS.websocket_sock_ops.removePeer(sock,peer)}return 0},bind(sock,addr,port){if(typeof sock.saddr!="undefined"||typeof sock.sport!="undefined"){throw new FS.ErrnoError(28)}sock.saddr=addr;sock.sport=port;if(sock.type===2){if(sock.server){sock.server.close();sock.server=null}try{sock.sock_ops.listen(sock,0)}catch(e){if(!(e.name==="ErrnoError"))throw e;if(e.errno!==138)throw e}}},connect(sock,addr,port){if(sock.server){throw new FS.ErrnoError(138)}if(typeof sock.daddr!="undefined"&&typeof sock.dport!="undefined"){var dest=SOCKFS.websocket_sock_ops.getPeer(sock,sock.daddr,sock.dport);if(dest){if(dest.socket.readyState===dest.socket.CONNECTING){throw new FS.ErrnoError(7)}else{throw new FS.ErrnoError(30)}}}var peer=SOCKFS.websocket_sock_ops.createPeer(sock,addr,port);sock.daddr=peer.addr;sock.dport=peer.port;sock.connecting=true},listen(sock,backlog){if(!ENVIRONMENT_IS_NODE){throw new FS.ErrnoError(138)}},accept(listensock){if(!listensock.server||!listensock.pending.length){throw new FS.ErrnoError(28)}var newsock=listensock.pending.shift();newsock.stream.flags=listensock.stream.flags;return newsock},getname(sock,peer){var addr,port;if(peer){if(sock.daddr===undefined||sock.dport===undefined){throw new FS.ErrnoError(53)}addr=sock.daddr;port=sock.dport}else{addr=sock.saddr||0;port=sock.sport||0}return{addr,port}},sendmsg(sock,buffer,offset,length,addr,port){if(sock.type===2){if(addr===undefined||port===undefined){addr=sock.daddr;port=sock.dport}if(addr===undefined||port===undefined){throw new FS.ErrnoError(17)}}else{addr=sock.daddr;port=sock.dport}var dest=SOCKFS.websocket_sock_ops.getPeer(sock,addr,port);if(sock.type===1){if(!dest||dest.socket.readyState===dest.socket.CLOSING||dest.socket.readyState===dest.socket.CLOSED){throw new FS.ErrnoError(53)}}if(ArrayBuffer.isView(buffer)){offset+=buffer.byteOffset;buffer=buffer.buffer}var data;data=buffer.slice(offset,offset+length);if(!dest||dest.socket.readyState!==dest.socket.OPEN){if(sock.type===2){if(!dest||dest.socket.readyState===dest.socket.CLOSING||dest.socket.readyState===dest.socket.CLOSED){dest=SOCKFS.websocket_sock_ops.createPeer(sock,addr,port)}}dest.msg_send_queue.push(data);return length}try{dest.socket.send(data);return length}catch(e){throw new FS.ErrnoError(28)}},recvmsg(sock,length){if(sock.type===1&&sock.server){throw new FS.ErrnoError(53)}var queued=sock.recv_queue.shift();if(!queued){if(sock.type===1){var dest=SOCKFS.websocket_sock_ops.getPeer(sock,sock.daddr,sock.dport);if(!dest){throw new FS.ErrnoError(53)}if(dest.socket.readyState===dest.socket.CLOSING||dest.socket.readyState===dest.socket.CLOSED){return null}throw new FS.ErrnoError(6)}throw new FS.ErrnoError(6)}var queuedLength=queued.data.byteLength||queued.data.length;var queuedOffset=queued.data.byteOffset||0;var queuedBuffer=queued.data.buffer||queued.data;var bytesRead=Math.min(length,queuedLength);var res={buffer:new Uint8Array(queuedBuffer,queuedOffset,bytesRead),addr:queued.addr,port:queued.port};if(sock.type===1&&bytesRead<queuedLength){var bytesRemaining=queuedLength-bytesRead;queued.data=new Uint8Array(queuedBuffer,queuedOffset+bytesRead,bytesRemaining);sock.recv_queue.unshift(queued)}return res}}};var getSocketFromFD=fd=>{var socket=SOCKFS.getSocket(fd);if(!socket)throw new FS.ErrnoError(8);return socket};var inetNtop4=addr=>(addr&255)+"."+(addr>>8&255)+"."+(addr>>16&255)+"."+(addr>>24&255);var inetNtop6=ints=>{var str="";var word=0;var longest=0;var lastzero=0;var zstart=0;var len=0;var i=0;var parts=[ints[0]&65535,ints[0]>>16,ints[1]&65535,ints[1]>>16,ints[2]&65535,ints[2]>>16,ints[3]&65535,ints[3]>>16];var hasipv4=true;var v4part="";for(i=0;i<5;i++){if(parts[i]!==0){hasipv4=false;break}}if(hasipv4){v4part=inetNtop4(parts[6]|parts[7]<<16);if(parts[5]===-1){str="::ffff:";str+=v4part;return str}if(parts[5]===0){str="::";if(v4part==="0.0.0.0")v4part="";if(v4part==="0.0.0.1")v4part="1";str+=v4part;return str}}for(word=0;word<8;word++){if(parts[word]===0){if(word-lastzero>1){len=0}lastzero=word;len++}if(len>longest){longest=len;zstart=word-longest+1}}for(word=0;word<8;word++){if(longest>1){if(parts[word]===0&&word>=zstart&&word<zstart+longest){if(word===zstart){str+=":";if(zstart===0)str+=":"}continue}}str+=Number(_ntohs(parts[word]&65535)).toString(16);str+=word<7?":":""}return str};var readSockaddr=(sa,salen)=>{var family=HEAP16[sa>>1];var port=_ntohs(HEAPU16[sa+2>>1]);var addr;switch(family){case 2:if(salen!==16){return{errno:28}}addr=HEAP32[sa+4>>2];addr=inetNtop4(addr);break;case 10:if(salen!==28){return{errno:28}}addr=[HEAP32[sa+8>>2],HEAP32[sa+12>>2],HEAP32[sa+16>>2],HEAP32[sa+20>>2]];addr=inetNtop6(addr);break;default:return{errno:5}}return{family,addr,port}};var inetPton4=str=>{var b=str.split(".");for(var i=0;i<4;i++){var tmp=Number(b[i]);if(isNaN(tmp))return null;b[i]=tmp}return(b[0]|b[1]<<8|b[2]<<16|b[3]<<24)>>>0};var jstoi_q=str=>parseInt(str);var inetPton6=str=>{var words;var w,offset,z;var valid6regx=/^((?=.*::)(?!.*::.+::)(::)?([\dA-F]{1,4}:(:|\b)|){5}|([\dA-F]{1,4}:){6})((([\dA-F]{1,4}((?!\3)::|:\b|$))|(?!\2\3)){2}|(((2[0-4]|1\d|[1-9])?\d|25[0-5])\.?\b){4})$/i;var parts=[];if(!valid6regx.test(str)){return null}if(str==="::"){return[0,0,0,0,0,0,0,0]}if(str.startsWith("::")){str=str.replace("::","Z:")}else{str=str.replace("::",":Z:")}if(str.indexOf(".")>0){str=str.replace(new RegExp("[.]","g"),":");words=str.split(":");words[words.length-4]=jstoi_q(words[words.length-4])+jstoi_q(words[words.length-3])*256;words[words.length-3]=jstoi_q(words[words.length-2])+jstoi_q(words[words.length-1])*256;words=words.slice(0,words.length-2)}else{words=str.split(":")}offset=0;z=0;for(w=0;w<words.length;w++){if(typeof words[w]=="string"){if(words[w]==="Z"){for(z=0;z<8-words.length+1;z++){parts[w+z]=0}offset=z-1}else{parts[w+offset]=_htons(parseInt(words[w],16))}}else{parts[w+offset]=words[w]}}return[parts[1]<<16|parts[0],parts[3]<<16|parts[2],parts[5]<<16|parts[4],parts[7]<<16|parts[6]]};var DNS={address_map:{id:1,addrs:{},names:{}},lookup_name(name){var res=inetPton4(name);if(res!==null){return name}res=inetPton6(name);if(res!==null){return name}var addr;if(DNS.address_map.addrs[name]){addr=DNS.address_map.addrs[name]}else{var id=DNS.address_map.id++;assert(id<65535,"exceeded max address mappings of 65535");addr="172.29."+(id&255)+"."+(id&65280);DNS.address_map.names[addr]=name;DNS.address_map.addrs[name]=addr}return addr},lookup_addr(addr){if(DNS.address_map.names[addr]){return DNS.address_map.names[addr]}return null}};var getSocketAddress=(addrp,addrlen)=>{var info=readSockaddr(addrp,addrlen);if(info.errno)throw new FS.ErrnoError(info.errno);info.addr=DNS.lookup_addr(info.addr)||info.addr;return info};function ___syscall_bind(fd,addr,addrlen,d1,d2,d3){try{var sock=getSocketFromFD(fd);var info=getSocketAddress(addr,addrlen);sock.sock_ops.bind(sock,info.addr,info.port);return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_connect(fd,addr,addrlen,d1,d2,d3){try{var sock=getSocketFromFD(fd);var info=getSocketAddress(addr,addrlen);sock.sock_ops.connect(sock,info.addr,info.port);return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}var syscallGetVarargI=()=>{assert(SYSCALLS.varargs!=undefined);var ret=HEAP32[+SYSCALLS.varargs>>2];SYSCALLS.varargs+=4;return ret};var syscallGetVarargP=syscallGetVarargI;function ___syscall_fcntl64(fd,cmd,varargs){SYSCALLS.varargs=varargs;try{var stream=SYSCALLS.getStreamFromFD(fd);switch(cmd){case 0:{var arg=syscallGetVarargI();if(arg<0){return-28}while(FS.streams[arg]){arg++}var newStream;newStream=FS.dupStream(stream,arg);return newStream.fd}case 1:case 2:return 0;case 3:return stream.flags;case 4:{var arg=syscallGetVarargI();stream.flags|=arg;return 0}case 12:{var arg=syscallGetVarargP();var offset=0;HEAP16[arg+offset>>1]=2;return 0}case 13:case 14:return 0}return-28}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_fstat64(fd,buf){try{var stream=SYSCALLS.getStreamFromFD(fd);return SYSCALLS.doStat(FS.stat,stream.path,buf)}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}var stringToUTF8=(str,outPtr,maxBytesToWrite)=>{assert(typeof maxBytesToWrite=="number","stringToUTF8(str, outPtr, maxBytesToWrite) is missing the third parameter that specifies the length of the output buffer!");return stringToUTF8Array(str,HEAPU8,outPtr,maxBytesToWrite)};function ___syscall_getcwd(buf,size){try{if(size===0)return-28;var cwd=FS.cwd();var cwdLengthInBytes=lengthBytesUTF8(cwd)+1;if(size<cwdLengthInBytes)return-68;stringToUTF8(cwd,buf,size);return cwdLengthInBytes}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}var writeSockaddr=(sa,family,addr,port,addrlen)=>{switch(family){case 2:addr=inetPton4(addr);zeroMemory(sa,16);if(addrlen){HEAP32[addrlen>>2]=16}HEAP16[sa>>1]=family;HEAP32[sa+4>>2]=addr;HEAP16[sa+2>>1]=_htons(port);break;case 10:addr=inetPton6(addr);zeroMemory(sa,28);if(addrlen){HEAP32[addrlen>>2]=28}HEAP32[sa>>2]=family;HEAP32[sa+8>>2]=addr[0];HEAP32[sa+12>>2]=addr[1];HEAP32[sa+16>>2]=addr[2];HEAP32[sa+20>>2]=addr[3];HEAP16[sa+2>>1]=_htons(port);break;default:return 5}return 0};function ___syscall_getsockname(fd,addr,addrlen,d1,d2,d3){try{var sock=getSocketFromFD(fd);var errno=writeSockaddr(addr,sock.family,DNS.lookup_name(sock.saddr||"0.0.0.0"),sock.sport,addrlen);assert(!errno);return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_getsockopt(fd,level,optname,optval,optlen,d1){try{var sock=getSocketFromFD(fd);if(level===1){if(optname===4){HEAP32[optval>>2]=sock.error;HEAP32[optlen>>2]=4;sock.error=null;return 0}}return-50}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_ioctl(fd,op,varargs){SYSCALLS.varargs=varargs;try{var stream=SYSCALLS.getStreamFromFD(fd);switch(op){case 21509:{if(!stream.tty)return-59;return 0}case 21505:{if(!stream.tty)return-59;if(stream.tty.ops.ioctl_tcgets){var termios=stream.tty.ops.ioctl_tcgets(stream);var argp=syscallGetVarargP();HEAP32[argp>>2]=termios.c_iflag||0;HEAP32[argp+4>>2]=termios.c_oflag||0;HEAP32[argp+8>>2]=termios.c_cflag||0;HEAP32[argp+12>>2]=termios.c_lflag||0;for(var i=0;i<32;i++){HEAP8[argp+i+17]=termios.c_cc[i]||0}return 0}return 0}case 21510:case 21511:case 21512:{if(!stream.tty)return-59;return 0}case 21506:case 21507:case 21508:{if(!stream.tty)return-59;if(stream.tty.ops.ioctl_tcsets){var argp=syscallGetVarargP();var c_iflag=HEAP32[argp>>2];var c_oflag=HEAP32[argp+4>>2];var c_cflag=HEAP32[argp+8>>2];var c_lflag=HEAP32[argp+12>>2];var c_cc=[];for(var i=0;i<32;i++){c_cc.push(HEAP8[argp+i+17])}return stream.tty.ops.ioctl_tcsets(stream.tty,op,{c_iflag,c_oflag,c_cflag,c_lflag,c_cc})}return 0}case 21519:{if(!stream.tty)return-59;var argp=syscallGetVarargP();HEAP32[argp>>2]=0;return 0}case 21520:{if(!stream.tty)return-59;return-28}case 21531:{var argp=syscallGetVarargP();return FS.ioctl(stream,op,argp)}case 21523:{if(!stream.tty)return-59;if(stream.tty.ops.ioctl_tiocgwinsz){var winsize=stream.tty.ops.ioctl_tiocgwinsz(stream.tty);var argp=syscallGetVarargP();HEAP16[argp>>1]=winsize[0];HEAP16[argp+2>>1]=winsize[1]}return 0}case 21524:{if(!stream.tty)return-59;return 0}case 21515:{if(!stream.tty)return-59;return 0}default:return-28}}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_lstat64(path,buf){try{path=SYSCALLS.getStr(path);return SYSCALLS.doStat(FS.lstat,path,buf)}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_newfstatat(dirfd,path,buf,flags){try{path=SYSCALLS.getStr(path);var nofollow=flags&256;var allowEmpty=flags&4096;flags=flags&~6400;assert(!flags,`unknown flags in __syscall_newfstatat: ${flags}`);path=SYSCALLS.calculateAt(dirfd,path,allowEmpty);return SYSCALLS.doStat(nofollow?FS.lstat:FS.stat,path,buf)}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_openat(dirfd,path,flags,varargs){SYSCALLS.varargs=varargs;try{path=SYSCALLS.getStr(path);path=SYSCALLS.calculateAt(dirfd,path);var mode=varargs?syscallGetVarargI():0;return FS.open(path,flags,mode).fd}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}var PIPEFS={BUCKET_BUFFER_SIZE:8192,mount(mount){return FS.createNode(null,"/",16384|511,0)},createPipe(){var pipe={buckets:[],refcnt:2};pipe.buckets.push({buffer:new Uint8Array(PIPEFS.BUCKET_BUFFER_SIZE),offset:0,roffset:0});var rName=PIPEFS.nextname();var wName=PIPEFS.nextname();var rNode=FS.createNode(PIPEFS.root,rName,4096,0);var wNode=FS.createNode(PIPEFS.root,wName,4096,0);rNode.pipe=pipe;wNode.pipe=pipe;var readableStream=FS.createStream({path:rName,node:rNode,flags:0,seekable:false,stream_ops:PIPEFS.stream_ops});rNode.stream=readableStream;var writableStream=FS.createStream({path:wName,node:wNode,flags:1,seekable:false,stream_ops:PIPEFS.stream_ops});wNode.stream=writableStream;return{readable_fd:readableStream.fd,writable_fd:writableStream.fd}},stream_ops:{poll(stream){var pipe=stream.node.pipe;if((stream.flags&2097155)===1){return 256|4}if(pipe.buckets.length>0){for(var i=0;i<pipe.buckets.length;i++){var bucket=pipe.buckets[i];if(bucket.offset-bucket.roffset>0){return 64|1}}}return 0},ioctl(stream,request,varargs){return 28},fsync(stream){return 28},read(stream,buffer,offset,length,position){var pipe=stream.node.pipe;var currentLength=0;for(var i=0;i<pipe.buckets.length;i++){var bucket=pipe.buckets[i];currentLength+=bucket.offset-bucket.roffset}assert(buffer instanceof ArrayBuffer||ArrayBuffer.isView(buffer));var data=buffer.subarray(offset,offset+length);if(length<=0){return 0}if(currentLength==0){throw new FS.ErrnoError(6)}var toRead=Math.min(currentLength,length);var totalRead=toRead;var toRemove=0;for(var i=0;i<pipe.buckets.length;i++){var currBucket=pipe.buckets[i];var bucketSize=currBucket.offset-currBucket.roffset;if(toRead<=bucketSize){var tmpSlice=currBucket.buffer.subarray(currBucket.roffset,currBucket.offset);if(toRead<bucketSize){tmpSlice=tmpSlice.subarray(0,toRead);currBucket.roffset+=toRead}else{toRemove++}data.set(tmpSlice);break}else{var tmpSlice=currBucket.buffer.subarray(currBucket.roffset,currBucket.offset);data.set(tmpSlice);data=data.subarray(tmpSlice.byteLength);toRead-=tmpSlice.byteLength;toRemove++}}if(toRemove&&toRemove==pipe.buckets.length){toRemove--;pipe.buckets[toRemove].offset=0;pipe.buckets[toRemove].roffset=0}pipe.buckets.splice(0,toRemove);return totalRead},write(stream,buffer,offset,length,position){var pipe=stream.node.pipe;assert(buffer instanceof ArrayBuffer||ArrayBuffer.isView(buffer));var data=buffer.subarray(offset,offset+length);var dataLen=data.byteLength;if(dataLen<=0){return 0}var currBucket=null;if(pipe.buckets.length==0){currBucket={buffer:new Uint8Array(PIPEFS.BUCKET_BUFFER_SIZE),offset:0,roffset:0};pipe.buckets.push(currBucket)}else{currBucket=pipe.buckets[pipe.buckets.length-1]}assert(currBucket.offset<=PIPEFS.BUCKET_BUFFER_SIZE);var freeBytesInCurrBuffer=PIPEFS.BUCKET_BUFFER_SIZE-currBucket.offset;if(freeBytesInCurrBuffer>=dataLen){currBucket.buffer.set(data,currBucket.offset);currBucket.offset+=dataLen;return dataLen}else if(freeBytesInCurrBuffer>0){currBucket.buffer.set(data.subarray(0,freeBytesInCurrBuffer),currBucket.offset);currBucket.offset+=freeBytesInCurrBuffer;data=data.subarray(freeBytesInCurrBuffer,data.byteLength)}var numBuckets=data.byteLength/PIPEFS.BUCKET_BUFFER_SIZE|0;var remElements=data.byteLength%PIPEFS.BUCKET_BUFFER_SIZE;for(var i=0;i<numBuckets;i++){var newBucket={buffer:new Uint8Array(PIPEFS.BUCKET_BUFFER_SIZE),offset:PIPEFS.BUCKET_BUFFER_SIZE,roffset:0};pipe.buckets.push(newBucket);newBucket.buffer.set(data.subarray(0,PIPEFS.BUCKET_BUFFER_SIZE));data=data.subarray(PIPEFS.BUCKET_BUFFER_SIZE,data.byteLength)}if(remElements>0){var newBucket={buffer:new Uint8Array(PIPEFS.BUCKET_BUFFER_SIZE),offset:data.byteLength,roffset:0};pipe.buckets.push(newBucket);newBucket.buffer.set(data)}return dataLen},close(stream){var pipe=stream.node.pipe;pipe.refcnt--;if(pipe.refcnt===0){pipe.buckets=null}}},nextname(){if(!PIPEFS.nextname.current){PIPEFS.nextname.current=0}return"pipe["+PIPEFS.nextname.current+++"]"}};function ___syscall_pipe(fdPtr){try{if(fdPtr==0){throw new FS.ErrnoError(21)}var res=PIPEFS.createPipe();HEAP32[fdPtr>>2]=res.readable_fd;HEAP32[fdPtr+4>>2]=res.writable_fd;return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_poll(fds,nfds,timeout){try{var nonzero=0;for(var i=0;i<nfds;i++){var pollfd=fds+8*i;var fd=HEAP32[pollfd>>2];var events=HEAP16[pollfd+4>>1];var mask=32;var stream=FS.getStream(fd);if(stream){mask=SYSCALLS.DEFAULT_POLLMASK;if(stream.stream_ops.poll){mask=stream.stream_ops.poll(stream,-1)}}mask&=events|8|16;if(mask)nonzero++;HEAP16[pollfd+6>>1]=mask}return nonzero}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_readlinkat(dirfd,path,buf,bufsize){try{path=SYSCALLS.getStr(path);path=SYSCALLS.calculateAt(dirfd,path);if(bufsize<=0)return-28;var ret=FS.readlink(path);var len=Math.min(bufsize,lengthBytesUTF8(ret));var endChar=HEAP8[buf+len];stringToUTF8(ret,buf,bufsize+1);HEAP8[buf+len]=endChar;return len}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_recvfrom(fd,buf,len,flags,addr,addrlen){try{var sock=getSocketFromFD(fd);var msg=sock.sock_ops.recvmsg(sock,len);if(!msg)return 0;if(addr){var errno=writeSockaddr(addr,sock.family,DNS.lookup_name(msg.addr),msg.port,addrlen);assert(!errno)}HEAPU8.set(msg.buffer,buf);return msg.buffer.byteLength}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_renameat(olddirfd,oldpath,newdirfd,newpath){try{oldpath=SYSCALLS.getStr(oldpath);newpath=SYSCALLS.getStr(newpath);oldpath=SYSCALLS.calculateAt(olddirfd,oldpath);newpath=SYSCALLS.calculateAt(newdirfd,newpath);FS.rename(oldpath,newpath);return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_sendto(fd,message,length,flags,addr,addr_len){try{var sock=getSocketFromFD(fd);if(!addr){return FS.write(sock.stream,HEAP8,message,length)}var dest=getSocketAddress(addr,addr_len);return sock.sock_ops.sendmsg(sock,HEAP8,message,length,dest.addr,dest.port)}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_socket(domain,type,protocol){try{var sock=SOCKFS.createSocket(domain,type,protocol);return sock.stream.fd}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_stat64(path,buf){try{path=SYSCALLS.getStr(path);return SYSCALLS.doStat(FS.stat,path,buf)}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}function ___syscall_unlinkat(dirfd,path,flags){try{path=SYSCALLS.getStr(path);path=SYSCALLS.calculateAt(dirfd,path);if(flags===0){FS.unlink(path)}else if(flags===512){FS.rmdir(path)}else{abort("Invalid flags passed to unlinkat")}return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return-e.errno}}var __abort_js=()=>{abort("native code called abort()")};var nowIsMonotonic=1;var __emscripten_get_now_is_monotonic=()=>nowIsMonotonic;var runtimeKeepaliveCounter=0;var __emscripten_runtime_keepalive_clear=()=>{noExitRuntime=false;runtimeKeepaliveCounter=0};var __emscripten_throw_longjmp=()=>{throw Infinity};var convertI32PairToI53Checked=(lo,hi)=>{assert(lo==lo>>>0||lo==(lo|0));assert(hi===(hi|0));return hi+2097152>>>0<4194305-!!lo?(lo>>>0)+hi*4294967296:NaN};function __gmtime_js(time_low,time_high,tmPtr){var time=convertI32PairToI53Checked(time_low,time_high);var date=new Date(time*1e3);HEAP32[tmPtr>>2]=date.getUTCSeconds();HEAP32[tmPtr+4>>2]=date.getUTCMinutes();HEAP32[tmPtr+8>>2]=date.getUTCHours();HEAP32[tmPtr+12>>2]=date.getUTCDate();HEAP32[tmPtr+16>>2]=date.getUTCMonth();HEAP32[tmPtr+20>>2]=date.getUTCFullYear()-1900;HEAP32[tmPtr+24>>2]=date.getUTCDay();var start=Date.UTC(date.getUTCFullYear(),0,1,0,0,0,0);var yday=(date.getTime()-start)/(1e3*60*60*24)|0;HEAP32[tmPtr+28>>2]=yday}var timers={};var handleException=e=>{if(e instanceof ExitStatus||e=="unwind"){return EXITSTATUS}checkStackCookie();if(e instanceof WebAssembly.RuntimeError){if(_emscripten_stack_get_current()<=0){err("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 65536)")}}quit_(1,e)};var keepRuntimeAlive=()=>noExitRuntime||runtimeKeepaliveCounter>0;var _proc_exit=code=>{EXITSTATUS=code;if(!keepRuntimeAlive()){Module["onExit"]?.(code);ABORT=true}quit_(code,new ExitStatus(code))};var exitJS=(status,implicit)=>{EXITSTATUS=status;checkUnflushedContent();if(keepRuntimeAlive()&&!implicit){var msg=`program exited (with status: ${status}), but keepRuntimeAlive() is set (counter=${runtimeKeepaliveCounter}) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)`;err(msg)}_proc_exit(status)};var _exit=exitJS;var maybeExit=()=>{if(!keepRuntimeAlive()){try{_exit(EXITSTATUS)}catch(e){handleException(e)}}};var callUserCallback=func=>{if(ABORT){err("user callback triggered after runtime exited or application aborted.  Ignoring.");return}try{func();maybeExit()}catch(e){handleException(e)}};var _emscripten_get_now=()=>performance.now();var __setitimer_js=(which,timeout_ms)=>{if(timers[which]){clearTimeout(timers[which].id);delete timers[which]}if(!timeout_ms)return 0;var id=setTimeout(()=>{assert(which in timers);delete timers[which];callUserCallback(()=>__emscripten_timeout(which,_emscripten_get_now()))},timeout_ms);timers[which]={id,timeout_ms};return 0};var __tzset_js=(timezone,daylight,std_name,dst_name)=>{var currentYear=(new Date).getFullYear();var winter=new Date(currentYear,0,1);var summer=new Date(currentYear,6,1);var winterOffset=winter.getTimezoneOffset();var summerOffset=summer.getTimezoneOffset();var stdTimezoneOffset=Math.max(winterOffset,summerOffset);HEAPU32[timezone>>2]=stdTimezoneOffset*60;HEAP32[daylight>>2]=Number(winterOffset!=summerOffset);var extractZone=timezoneOffset=>{var sign=timezoneOffset>=0?"-":"+";var absOffset=Math.abs(timezoneOffset);var hours=String(Math.floor(absOffset/60)).padStart(2,"0");var minutes=String(absOffset%60).padStart(2,"0");return`UTC${sign}${hours}${minutes}`};var winterName=extractZone(winterOffset);var summerName=extractZone(summerOffset);assert(winterName);assert(summerName);assert(lengthBytesUTF8(winterName)<=16,`timezone name truncated to fit in TZNAME_MAX (${winterName})`);assert(lengthBytesUTF8(summerName)<=16,`timezone name truncated to fit in TZNAME_MAX (${summerName})`);if(summerOffset<winterOffset){stringToUTF8(winterName,std_name,17);stringToUTF8(summerName,dst_name,17)}else{stringToUTF8(winterName,dst_name,17);stringToUTF8(summerName,std_name,17)}};var _emscripten_date_now=()=>Date.now();var _emscripten_err=str=>err(UTF8ToString(str));var getHeapMax=()=>2147483648;var growMemory=size=>{var b=wasmMemory.buffer;var pages=(size-b.byteLength+65535)/65536|0;try{wasmMemory.grow(pages);updateMemoryViews();return 1}catch(e){err(`growMemory: Attempted to grow heap from ${b.byteLength} bytes to ${size} bytes, but got error: ${e}`)}};var _emscripten_resize_heap=requestedSize=>{var oldSize=HEAPU8.length;requestedSize>>>=0;assert(requestedSize>oldSize);var maxHeapSize=getHeapMax();if(requestedSize>maxHeapSize){err(`Cannot enlarge memory, requested ${requestedSize} bytes, but the limit is ${maxHeapSize} bytes!`);return false}for(var cutDown=1;cutDown<=4;cutDown*=2){var overGrownHeapSize=oldSize*(1+.2/cutDown);overGrownHeapSize=Math.min(overGrownHeapSize,requestedSize+100663296);var newSize=Math.min(maxHeapSize,alignMemory(Math.max(requestedSize,overGrownHeapSize),65536));var replacement=growMemory(newSize);if(replacement){return true}}err(`Failed to grow the heap from ${oldSize} bytes to ${newSize} bytes, not enough memory!`);return false};var ENV={};var getExecutableName=()=>thisProgram||"./this.program";var getEnvStrings=()=>{if(!getEnvStrings.strings){var lang=(typeof navigator=="object"&&navigator.languages&&navigator.languages[0]||"C").replace("-","_")+".UTF-8";var env={USER:"web_user",LOGNAME:"web_user",PATH:"/",PWD:"/",HOME:"/home/web_user",LANG:lang,_:getExecutableName()};for(var x in ENV){if(ENV[x]===undefined)delete env[x];else env[x]=ENV[x]}var strings=[];for(var x in env){strings.push(`${x}=${env[x]}`)}getEnvStrings.strings=strings}return getEnvStrings.strings};var stringToAscii=(str,buffer)=>{for(var i=0;i<str.length;++i){assert(str.charCodeAt(i)===(str.charCodeAt(i)&255));HEAP8[buffer++]=str.charCodeAt(i)}HEAP8[buffer]=0};var _environ_get=(__environ,environ_buf)=>{var bufSize=0;getEnvStrings().forEach((string,i)=>{var ptr=environ_buf+bufSize;HEAPU32[__environ+i*4>>2]=ptr;stringToAscii(string,ptr);bufSize+=string.length+1});return 0};var _environ_sizes_get=(penviron_count,penviron_buf_size)=>{var strings=getEnvStrings();HEAPU32[penviron_count>>2]=strings.length;var bufSize=0;strings.forEach(string=>bufSize+=string.length+1);HEAPU32[penviron_buf_size>>2]=bufSize;return 0};function _fd_close(fd){try{var stream=SYSCALLS.getStreamFromFD(fd);FS.close(stream);return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return e.errno}}var doReadv=(stream,iov,iovcnt,offset)=>{var ret=0;for(var i=0;i<iovcnt;i++){var ptr=HEAPU32[iov>>2];var len=HEAPU32[iov+4>>2];iov+=8;var curr=FS.read(stream,HEAP8,ptr,len,offset);if(curr<0)return-1;ret+=curr;if(curr<len)break;if(typeof offset!="undefined"){offset+=curr}}return ret};function _fd_read(fd,iov,iovcnt,pnum){try{var stream=SYSCALLS.getStreamFromFD(fd);var num=doReadv(stream,iov,iovcnt);HEAPU32[pnum>>2]=num;return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return e.errno}}function _fd_seek(fd,offset_low,offset_high,whence,newOffset){var offset=convertI32PairToI53Checked(offset_low,offset_high);try{if(isNaN(offset))return 61;var stream=SYSCALLS.getStreamFromFD(fd);FS.llseek(stream,offset,whence);tempI64=[stream.position>>>0,(tempDouble=stream.position,+Math.abs(tempDouble)>=1?tempDouble>0?+Math.floor(tempDouble/4294967296)>>>0:~~+Math.ceil((tempDouble-+(~~tempDouble>>>0))/4294967296)>>>0:0)],HEAP32[newOffset>>2]=tempI64[0],HEAP32[newOffset+4>>2]=tempI64[1];if(stream.getdents&&offset===0&&whence===0)stream.getdents=null;return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return e.errno}}var doWritev=(stream,iov,iovcnt,offset)=>{var ret=0;for(var i=0;i<iovcnt;i++){var ptr=HEAPU32[iov>>2];var len=HEAPU32[iov+4>>2];iov+=8;var curr=FS.write(stream,HEAP8,ptr,len,offset);if(curr<0)return-1;ret+=curr;if(curr<len){break}if(typeof offset!="undefined"){offset+=curr}}return ret};function _fd_write(fd,iov,iovcnt,pnum){try{var stream=SYSCALLS.getStreamFromFD(fd);var num=doWritev(stream,iov,iovcnt);HEAPU32[pnum>>2]=num;return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return e.errno}}var _getaddrinfo=(node,service,hint,out)=>{var addr=0;var port=0;var flags=0;var family=0;var type=0;var proto=0;var ai;function allocaddrinfo(family,type,proto,canon,addr,port){var sa,salen,ai;var errno;salen=family===10?28:16;addr=family===10?inetNtop6(addr):inetNtop4(addr);sa=_malloc(salen);errno=writeSockaddr(sa,family,addr,port);assert(!errno);ai=_malloc(32);HEAP32[ai+4>>2]=family;HEAP32[ai+8>>2]=type;HEAP32[ai+12>>2]=proto;HEAPU32[ai+24>>2]=canon;HEAPU32[ai+20>>2]=sa;if(family===10){HEAP32[ai+16>>2]=28}else{HEAP32[ai+16>>2]=16}HEAP32[ai+28>>2]=0;return ai}if(hint){flags=HEAP32[hint>>2];family=HEAP32[hint+4>>2];type=HEAP32[hint+8>>2];proto=HEAP32[hint+12>>2]}if(type&&!proto){proto=type===2?17:6}if(!type&&proto){type=proto===17?2:1}if(proto===0){proto=6}if(type===0){type=1}if(!node&&!service){return-2}if(flags&~(1|2|4|1024|8|16|32)){return-1}if(hint!==0&&HEAP32[hint>>2]&2&&!node){return-1}if(flags&32){return-2}if(type!==0&&type!==1&&type!==2){return-7}if(family!==0&&family!==2&&family!==10){return-6}if(service){service=UTF8ToString(service);port=parseInt(service,10);if(isNaN(port)){if(flags&1024){return-2}return-8}}if(!node){if(family===0){family=2}if((flags&1)===0){if(family===2){addr=_htonl(2130706433)}else{addr=[0,0,0,_htonl(1)]}}ai=allocaddrinfo(family,type,proto,null,addr,port);HEAPU32[out>>2]=ai;return 0}node=UTF8ToString(node);addr=inetPton4(node);if(addr!==null){if(family===0||family===2){family=2}else if(family===10&&flags&8){addr=[0,0,_htonl(65535),addr];family=10}else{return-2}}else{addr=inetPton6(node);if(addr!==null){if(family===0||family===10){family=10}else{return-2}}}if(addr!=null){ai=allocaddrinfo(family,type,proto,node,addr,port);HEAPU32[out>>2]=ai;return 0}if(flags&4){return-2}node=DNS.lookup_name(node);addr=inetPton4(node);if(family===0){family=2}else if(family===10){addr=[0,0,_htonl(65535),addr]}ai=allocaddrinfo(family,type,proto,null,addr,port);HEAPU32[out>>2]=ai;return 0};function _random_get(buffer,size){try{randomFill(HEAPU8.subarray(buffer,buffer+size));return 0}catch(e){if(typeof FS=="undefined"||!(e.name==="ErrnoError"))throw e;return e.errno}}var uleb128Encode=(n,target)=>{assert(n<16384);if(n<128){target.push(n)}else{target.push(n%128|128,n>>7)}};var sigToWasmTypes=sig=>{assert(!sig.includes("j"),"i64 not permitted in function signatures when WASM_BIGINT is disabled");var typeNames={i:"i32",j:"i64",f:"f32",d:"f64",e:"externref",p:"i32"};var type={parameters:[],results:sig[0]=="v"?[]:[typeNames[sig[0]]]};for(var i=1;i<sig.length;++i){assert(sig[i]in typeNames,"invalid signature char: "+sig[i]);type.parameters.push(typeNames[sig[i]])}return type};var generateFuncType=(sig,target)=>{var sigRet=sig.slice(0,1);var sigParam=sig.slice(1);var typeCodes={i:127,p:127,j:126,f:125,d:124,e:111};target.push(96);uleb128Encode(sigParam.length,target);for(var i=0;i<sigParam.length;++i){assert(sigParam[i]in typeCodes,"invalid signature char: "+sigParam[i]);target.push(typeCodes[sigParam[i]])}if(sigRet=="v"){target.push(0)}else{target.push(1,typeCodes[sigRet])}};var convertJsFunctionToWasm=(func,sig)=>{assert(!sig.includes("j"),"i64 not permitted in function signatures when WASM_BIGINT is disabled");if(typeof WebAssembly.Function=="function"){return new WebAssembly.Function(sigToWasmTypes(sig),func)}var typeSectionBody=[1];generateFuncType(sig,typeSectionBody);var bytes=[0,97,115,109,1,0,0,0,1];uleb128Encode(typeSectionBody.length,bytes);bytes.push(...typeSectionBody);bytes.push(2,7,1,1,101,1,102,0,0,7,5,1,1,102,0,0);var module=new WebAssembly.Module(new Uint8Array(bytes));var instance=new WebAssembly.Instance(module,{e:{f:func}});var wrappedFunc=instance.exports["f"];return wrappedFunc};var updateTableMap=(offset,count)=>{if(functionsInTableMap){for(var i=offset;i<offset+count;i++){var item=getWasmTableEntry(i);if(item){functionsInTableMap.set(item,i)}}}};var functionsInTableMap;var getFunctionAddress=func=>{if(!functionsInTableMap){functionsInTableMap=new WeakMap;updateTableMap(0,wasmTable.length)}return functionsInTableMap.get(func)||0};var freeTableIndexes=[];var getEmptyTableSlot=()=>{if(freeTableIndexes.length){return freeTableIndexes.pop()}try{wasmTable.grow(1)}catch(err){if(!(err instanceof RangeError)){throw err}throw"Unable to grow wasm table. Set ALLOW_TABLE_GROWTH."}return wasmTable.length-1};var setWasmTableEntry=(idx,func)=>wasmTable.set(idx,func);var addFunction=(func,sig)=>{assert(typeof func!="undefined");var rtn=getFunctionAddress(func);if(rtn){return rtn}var ret=getEmptyTableSlot();try{setWasmTableEntry(ret,func)}catch(err){if(!(err instanceof TypeError)){throw err}assert(typeof sig!="undefined","Missing signature argument to addFunction: "+func);var wrapped=convertJsFunctionToWasm(func,sig);setWasmTableEntry(ret,wrapped)}functionsInTableMap.set(func,ret);return ret};var removeFunction=index=>{functionsInTableMap.delete(getWasmTableEntry(index));setWasmTableEntry(index,null);freeTableIndexes.push(index)};var ALLOC_NORMAL=0;var ALLOC_STACK=1;var stackAlloc=sz=>__emscripten_stack_alloc(sz);var allocate=(slab,allocator)=>{var ret;assert(typeof allocator=="number","allocate no longer takes a type argument");assert(typeof slab!="number","allocate no longer takes a number as arg0");if(allocator==ALLOC_STACK){ret=stackAlloc(slab.length)}else{ret=_malloc(slab.length)}if(!slab.subarray&&!slab.slice){slab=new Uint8Array(slab)}HEAPU8.set(slab,ret);return ret};FS.createPreloadedFile=FS_createPreloadedFile;FS.staticInit();function checkIncomingModuleAPI(){ignoredModuleProp("fetchSettings")}var wasmImports={__assert_fail:___assert_fail,__call_sighandler:___call_sighandler,__cxa_throw:___cxa_throw,__syscall__newselect:___syscall__newselect,__syscall_bind:___syscall_bind,__syscall_connect:___syscall_connect,__syscall_fcntl64:___syscall_fcntl64,__syscall_fstat64:___syscall_fstat64,__syscall_getcwd:___syscall_getcwd,__syscall_getsockname:___syscall_getsockname,__syscall_getsockopt:___syscall_getsockopt,__syscall_ioctl:___syscall_ioctl,__syscall_lstat64:___syscall_lstat64,__syscall_newfstatat:___syscall_newfstatat,__syscall_openat:___syscall_openat,__syscall_pipe:___syscall_pipe,__syscall_poll:___syscall_poll,__syscall_readlinkat:___syscall_readlinkat,__syscall_recvfrom:___syscall_recvfrom,__syscall_renameat:___syscall_renameat,__syscall_sendto:___syscall_sendto,__syscall_socket:___syscall_socket,__syscall_stat64:___syscall_stat64,__syscall_unlinkat:___syscall_unlinkat,_abort_js:__abort_js,_emscripten_get_now_is_monotonic:__emscripten_get_now_is_monotonic,_emscripten_runtime_keepalive_clear:__emscripten_runtime_keepalive_clear,_emscripten_throw_longjmp:__emscripten_throw_longjmp,_gmtime_js:__gmtime_js,_setitimer_js:__setitimer_js,_tzset_js:__tzset_js,emscripten_date_now:_emscripten_date_now,emscripten_err:_emscripten_err,emscripten_get_now:_emscripten_get_now,emscripten_resize_heap:_emscripten_resize_heap,environ_get:_environ_get,environ_sizes_get:_environ_sizes_get,fd_close:_fd_close,fd_read:_fd_read,fd_seek:_fd_seek,fd_write:_fd_write,getaddrinfo:_getaddrinfo,invoke_i,invoke_ii,invoke_iiii,invoke_iiiiiijiii,invoke_jii,invoke_viii,proc_exit:_proc_exit,random_get:_random_get};if (wasmBinaryFile && isDataURI(wasmBinaryFile)) var wasmExports = createWasm();
 else var wasmExports = null;var ___wasm_call_ctors=createExportWrapper("__wasm_call_ctors",0);var _get_cacert=Module["_get_cacert"]=createExportWrapper("get_cacert",0);var _malloc=createExportWrapper("malloc",1);var _init_curl=Module["_init_curl"]=createExportWrapper("init_curl",0);var _http_set_options=Module["_http_set_options"]=createExportWrapper("http_set_options",4);var _free=Module["_free"]=createExportWrapper("free",1);var _http_set_cookie_jar=Module["_http_set_cookie_jar"]=createExportWrapper("http_set_cookie_jar",2);var _http_get_info=Module["_http_get_info"]=createExportWrapper("http_get_info",1);var _set_impersonate_profile=Module["_set_impersonate_profile"]=createExportWrapper("set_impersonate_profile",1);var _create_request=Module["_create_request"]=createExportWrapper("create_request",5);var _request_cleanup=Module["_request_cleanup"]=createExportWrapper("request_cleanup",1);var _request_set_proxy=Module["_request_set_proxy"]=createExportWrapper("request_set_proxy",2);var _session_create=Module["_session_create"]=createExportWrapper("session_create",0);var _session_perform=Module["_session_perform"]=createExportWrapper("session_perform",1);var _session_set_options=Module["_session_set_options"]=createExportWrapper("session_set_options",4);var _session_add_request=Module["_session_add_request"]=createExportWrapper("session_add_request",2);var _session_get_active=Module["_session_get_active"]=createExportWrapper("session_get_active",1);var _session_remove_request=Module["_session_remove_request"]=createExportWrapper("session_remove_request",2);var _session_cleanup=Module["_session_cleanup"]=createExportWrapper("session_cleanup",1);var _recv_from_socket=Module["_recv_from_socket"]=createExportWrapper("recv_from_socket",2);var _send_to_socket=Module["_send_to_socket"]=createExportWrapper("send_to_socket",3);var _tls_socket_set_options=Module["_tls_socket_set_options"]=createExportWrapper("tls_socket_set_options",2);var _get_version=Module["_get_version"]=createExportWrapper("get_version",0);var _get_error_str=Module["_get_error_str"]=createExportWrapper("get_error_str",1);var _recv_from_websocket=Module["_recv_from_websocket"]=createExportWrapper("recv_from_websocket",2);var _send_to_websocket=Module["_send_to_websocket"]=createExportWrapper("send_to_websocket",4);var _close_websocket=Module["_close_websocket"]=createExportWrapper("close_websocket",1);var _websocket_set_options=Module["_websocket_set_options"]=createExportWrapper("websocket_set_options",1);var _get_result_size=Module["_get_result_size"]=createExportWrapper("get_result_size",1);var _get_result_buffer=Module["_get_result_buffer"]=createExportWrapper("get_result_buffer",1);var _get_result_code=Module["_get_result_code"]=createExportWrapper("get_result_code",1);var _get_result_closed=Module["_get_result_closed"]=createExportWrapper("get_result_closed",1);var _get_result_bytes_left=Module["_get_result_bytes_left"]=createExportWrapper("get_result_bytes_left",1);var _get_result_is_text=Module["_get_result_is_text"]=createExportWrapper("get_result_is_text",1);var _htons=createExportWrapper("htons",1);var _ntohs=createExportWrapper("ntohs",1);var _fflush=createExportWrapper("fflush",1);var _htonl=createExportWrapper("htonl",1);var _strerror=createExportWrapper("strerror",1);var __emscripten_timeout=createExportWrapper("_emscripten_timeout",2);var _setThrew=createExportWrapper("setThrew",2);var __emscripten_tempret_set=createExportWrapper("_emscripten_tempret_set",1);var _emscripten_stack_init=()=>(_emscripten_stack_init=wasmExports["emscripten_stack_init"])();var _emscripten_stack_get_free=()=>(_emscripten_stack_get_free=wasmExports["emscripten_stack_get_free"])();var _emscripten_stack_get_base=()=>(_emscripten_stack_get_base=wasmExports["emscripten_stack_get_base"])();var _emscripten_stack_get_end=()=>(_emscripten_stack_get_end=wasmExports["emscripten_stack_get_end"])();var __emscripten_stack_restore=a0=>(__emscripten_stack_restore=wasmExports["_emscripten_stack_restore"])(a0);var __emscripten_stack_alloc=a0=>(__emscripten_stack_alloc=wasmExports["_emscripten_stack_alloc"])(a0);var _emscripten_stack_get_current=()=>(_emscripten_stack_get_current=wasmExports["emscripten_stack_get_current"])();var ___cxa_increment_exception_refcount=createExportWrapper("__cxa_increment_exception_refcount",1);var dynCall_iiji=Module["dynCall_iiji"]=createExportWrapper("dynCall_iiji",5);var dynCall_jii=Module["dynCall_jii"]=createExportWrapper("dynCall_jii",3);var dynCall_iiij=Module["dynCall_iiij"]=createExportWrapper("dynCall_iiij",5);var dynCall_iiiiijjii=Module["dynCall_iiiiijjii"]=createExportWrapper("dynCall_iiiiijjii",11);var dynCall_iiiiiijiii=Module["dynCall_iiiiiijiii"]=createExportWrapper("dynCall_iiiiiijiii",11);var dynCall_jiji=Module["dynCall_jiji"]=createExportWrapper("dynCall_jiji",5);function invoke_viii(index,a1,a2,a3){var sp=stackSave();try{getWasmTableEntry(index)(a1,a2,a3)}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}function invoke_i(index){var sp=stackSave();try{return getWasmTableEntry(index)()}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}function invoke_iiii(index,a1,a2,a3){var sp=stackSave();try{return getWasmTableEntry(index)(a1,a2,a3)}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}function invoke_ii(index,a1){var sp=stackSave();try{return getWasmTableEntry(index)(a1)}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}function invoke_iiiiiijiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10){var sp=stackSave();try{return dynCall_iiiiiijiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10)}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}function invoke_jii(index,a1,a2){var sp=stackSave();try{return dynCall_jii(index,a1,a2)}catch(e){stackRestore(sp);if(e!==e+0)throw e;_setThrew(1,0)}}Module["addFunction"]=addFunction;Module["removeFunction"]=removeFunction;Module["ALLOC_NORMAL"]=ALLOC_NORMAL;Module["allocate"]=allocate;var missingLibrarySymbols=["writeI53ToI64","writeI53ToI64Clamped","writeI53ToI64Signaling","writeI53ToU64Clamped","writeI53ToU64Signaling","readI53FromI64","readI53FromU64","convertI32PairToI53","convertU32PairToI53","getTempRet0","setTempRet0","emscriptenLog","readEmAsmArgs","listenOnce","autoResumeAudioContext","dynCallLegacy","getDynCaller","dynCall","runtimeKeepalivePush","runtimeKeepalivePop","asmjsMangle","HandleAllocator","getNativeTypeSize","STACK_SIZE","STACK_ALIGN","POINTER_SIZE","ASSERTIONS","getCFunc","ccall","cwrap","reallyNegative","unSign","strLen","reSign","formatString","intArrayToString","AsciiToString","UTF16ToString","stringToUTF16","lengthBytesUTF16","UTF32ToString","stringToUTF32","lengthBytesUTF32","stringToNewUTF8","stringToUTF8OnStack","writeArrayToMemory","registerKeyEventCallback","maybeCStringToJsString","findEventTarget","getBoundingClientRect","fillMouseEventData","registerMouseEventCallback","registerWheelEventCallback","registerUiEventCallback","registerFocusEventCallback","fillDeviceOrientationEventData","registerDeviceOrientationEventCallback","fillDeviceMotionEventData","registerDeviceMotionEventCallback","screenOrientation","fillOrientationChangeEventData","registerOrientationChangeEventCallback","fillFullscreenChangeEventData","registerFullscreenChangeEventCallback","JSEvents_requestFullscreen","JSEvents_resizeCanvasForFullscreen","registerRestoreOldStyle","hideEverythingExceptGivenElement","restoreHiddenElements","setLetterbox","softFullscreenResizeWebGLRenderTarget","doRequestFullscreen","fillPointerlockChangeEventData","registerPointerlockChangeEventCallback","registerPointerlockErrorEventCallback","requestPointerLock","fillVisibilityChangeEventData","registerVisibilityChangeEventCallback","registerTouchEventCallback","fillGamepadEventData","registerGamepadEventCallback","registerBeforeUnloadEventCallback","fillBatteryEventData","battery","registerBatteryEventCallback","setCanvasElementSize","getCanvasElementSize","jsStackTrace","getCallstack","convertPCtoSourceLocation","checkWasiClock","wasiRightsToMuslOFlags","wasiOFlagsToMuslOFlags","safeSetTimeout","setImmediateWrapped","safeRequestAnimationFrame","clearImmediateWrapped","polyfillSetImmediate","registerPostMainLoop","registerPreMainLoop","getPromise","makePromise","idsToPromises","makePromiseCallback","findMatchingCatch","Browser_asyncPrepareDataCounter","isLeapYear","ydayFromDate","arraySum","addDays","FS_unlink","FS_mkdirTree","_setNetworkCallback","heapObjectForWebGLType","toTypedArrayIndex","webgl_enable_ANGLE_instanced_arrays","webgl_enable_OES_vertex_array_object","webgl_enable_WEBGL_draw_buffers","webgl_enable_WEBGL_multi_draw","webgl_enable_EXT_polygon_offset_clamp","webgl_enable_EXT_clip_control","webgl_enable_WEBGL_polygon_mode","emscriptenWebGLGet","computeUnpackAlignedImageSize","colorChannelsInGlTextureFormat","emscriptenWebGLGetTexPixelData","emscriptenWebGLGetUniform","webglGetUniformLocation","webglPrepareUniformLocationsBeforeFirstUse","webglGetLeftBracePos","emscriptenWebGLGetVertexAttrib","__glGetActiveAttribOrUniform","writeGLArray","registerWebGlEventCallback","runAndAbortIfError","writeStringToMemory","writeAsciiToMemory","setErrNo","demangle","stackTrace"];missingLibrarySymbols.forEach(missingLibrarySymbol);var unexportedSymbols=["run","addOnPreRun","addOnInit","addOnPreMain","addOnExit","addOnPostRun","addRunDependency","removeRunDependency","out","err","callMain","abort","wasmMemory","wasmExports","writeStackCookie","checkStackCookie","convertI32PairToI53Checked","stackSave","stackRestore","stackAlloc","ptrToString","zeroMemory","exitJS","getHeapMax","growMemory","ENV","ERRNO_CODES","strError","inetPton4","inetNtop4","inetPton6","inetNtop6","readSockaddr","writeSockaddr","DNS","Protocols","Sockets","timers","warnOnce","readEmAsmArgsArray","jstoi_q","jstoi_s","getExecutableName","setWasmTableEntry","getWasmTableEntry","handleException","keepRuntimeAlive","callUserCallback","maybeExit","asyncLoad","alignMemory","mmapAlloc","wasmTable","noExitRuntime","uleb128Encode","sigToWasmTypes","generateFuncType","convertJsFunctionToWasm","freeTableIndexes","functionsInTableMap","getEmptyTableSlot","updateTableMap","getFunctionAddress","setValue","getValue","PATH","PATH_FS","UTF8Decoder","UTF8ArrayToString","UTF8ToString","stringToUTF8Array","stringToUTF8","lengthBytesUTF8","intArrayFromString","stringToAscii","UTF16Decoder","JSEvents","specialHTMLTargets","findCanvasEventTarget","currentFullscreenStrategy","restoreOldWindowedStyle","UNWIND_CACHE","ExitStatus","getEnvStrings","doReadv","doWritev","initRandomFill","randomFill","promiseMap","uncaughtExceptionCount","exceptionLast","exceptionCaught","ExceptionInfo","Browser","getPreloadedImageData__data","wget","MONTH_DAYS_REGULAR","MONTH_DAYS_LEAP","MONTH_DAYS_REGULAR_CUMULATIVE","MONTH_DAYS_LEAP_CUMULATIVE","SYSCALLS","getSocketFromFD","getSocketAddress","preloadPlugins","FS_createPreloadedFile","FS_modeStringToFlags","FS_getMode","FS_stdin_getChar_buffer","FS_stdin_getChar","FS_createPath","FS_createDevice","FS_readFile","FS","FS_createDataFile","FS_createLazyFile","MEMFS","TTY","PIPEFS","SOCKFS","tempFixedLengthArray","miniTempWebGLFloatBuffers","miniTempWebGLIntBuffers","GL","AL","GLUT","EGL","GLEW","IDBStore","SDL","SDL_gfx","ALLOC_STACK","allocateUTF8","allocateUTF8OnStack","print","printErr","webSockets","WS"];unexportedSymbols.forEach(unexportedRuntimeSymbol);var calledRun;dependenciesFulfilled=function runCaller(){if(!calledRun)run();if(!calledRun)dependenciesFulfilled=runCaller};function stackCheckInit(){_emscripten_stack_init();writeStackCookie()}function run(){if(runDependencies>0){return}stackCheckInit();preRun();if(runDependencies>0){return}function doRun(){if(calledRun)return;calledRun=true;Module["calledRun"]=true;if(ABORT)return;initRuntime();Module["onRuntimeInitialized"]?.();assert(!Module["_main"],'compiled without a main, but one is present. if you added it from JS, use Module["onRuntimeInitialized"]');postRun()}if(Module["setStatus"]){Module["setStatus"]("Running...");setTimeout(()=>{setTimeout(()=>Module["setStatus"](""),1);doRun()},1)}else{doRun()}checkStackCookie()}function checkUnflushedContent(){var oldOut=out;var oldErr=err;var has=false;out=err=x=>{has=true};try{_fflush(0);["stdout","stderr"].forEach(name=>{var info=FS.analyzePath("/dev/"+name);if(!info)return;var stream=info.object;var rdev=stream.rdev;var tty=TTY.ttys[rdev];if(tty?.output?.length){has=true}})}catch(e){}out=oldOut;err=oldErr;if(has){warnOnce("stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the Emscripten FAQ), or make sure to emit a newline when you printf etc.")}}if(Module["preInit"]){if(typeof Module["preInit"]=="function")Module["preInit"]=[Module["preInit"]];while(Module["preInit"].length>0){Module["preInit"].pop()()}}if (wasmBinaryFile && isDataURI(wasmBinaryFile)) run();//extra client code goes here
 /* __extra_libraries__ */
+//wisp protocol client, supporting both wisp v1 and v2 (spec from
+//https://github.com/MercuryWorkshop/wisp-protocol/tree/v2)
+//
+//this file is plain script (no es6 modules) so it can be injected into the
+//libcurl.js bundle alongside wisp.js; use the WispConnection global directly.
+//it is a drop-in upgrade of the legacy v1 client: by default it negotiates
+//wisp v2 (INFO handshake + extensions) and transparently falls back to v1 when
+//the server is a v1-only implementation or rejects the v2 subprotocol.
+
 //mapping of packet names to packet types
 const packet_types = {
   CONNECT: 0x01,
   DATA: 0x02,
   CONTINUE: 0x03,
-  CLOSE: 0x04
+  CLOSE: 0x04,
+  INFO: 0x05
 }
 
 //mapping of types to packet names
-const packet_names = [undefined, "CONNECT", "DATA", "CONTINUE", "CLOSE"];
+const packet_names = [undefined, "CONNECT", "DATA", "CONTINUE", "CLOSE", "INFO"];
 
+//wisp v2 protocol extension ids
+const extension_ids = {
+  UDP: 0x01,
+  PASSWORD_AUTH: 0x02,
+  KEY_AUTH: 0x03,
+  MOTD: 0x04,
+  STREAM_OPEN_CONFIRMATION: 0x05
+};
+
+//wisp close reason codes (shared between client and server)
+const close_reasons = {
+  UNKNOWN: 0x01,
+  VOLUNTARY: 0x02,
+  NETWORK_ERROR: 0x03,
+  INCOMPATIBLE_EXTENSIONS: 0x04,
+  INVALID_INFO: 0x41,
+  UNREACHABLE_HOST: 0x42,
+  NO_RESPONSE: 0x43,
+  CONN_REFUSED: 0x44,
+  TRANSFER_TIMEOUT: 0x47,
+  HOST_BLOCKED: 0x48,
+  CONN_THROTTLED: 0x49,
+  CLIENT_ERROR: 0x81,
+  AUTH_BAD_PASSWORD: 0xc0,
+  AUTH_BAD_SIGNATURE: 0xc1,
+  AUTH_MISSING_CREDENTIALS: 0xc2
+};
+
+const close_reason_names = {
+  0x01: "unknown reason",
+  0x02: "voluntary stream closure",
+  0x03: "network error",
+  0x04: "incompatible extensions",
+  0x41: "invalid stream information",
+  0x42: "unreachable destination host",
+  0x43: "connection timed out",
+  0x44: "destination refused the connection",
+  0x47: "data transfer timed out",
+  0x48: "destination is blocked by the server",
+  0x49: "connection throttled by the server",
+  0x81: "client error",
+  0xc0: "authentication failed, invalid username or password",
+  0xc1: "authentication failed, invalid signature",
+  0xc2: "authentication is required but no credentials were provided"
+};
+
+//read a little-endian unsigned integer from a uint8 array, honoring any
+//byteOffset of the source view so subarray() slices avoid copying. a DataView
+//is used because Uint32Array/Uint16Array views require aligned offsets.
 function uint_from_array(array) {
-  if (array.length == 4) return new Uint32Array(array.buffer)[0];
-  else if (array.length == 2) return new Uint16Array(array.buffer)[0];
-  else if (array.length == 1) return array[0];
+  let size = array.length;
+  let view = new DataView(array.buffer, array.byteOffset, size);
+  if (size == 4) return view.getUint32(0, true);
+  else if (size == 2) return view.getUint16(0, true);
+  else if (size == 1) return array[0];
   else throw "invalid array length";
 }
 
@@ -83,6 +144,81 @@ function create_packet(packet_type, stream_id, payload) {
   return packet;
 }
 
+//parse the extension list contained in an INFO packet payload. each entry is
+//[ext_id u8][payload_len u32 le][payload]. malformed entries are skipped.
+function parse_extensions(payload_bytes) {
+  let extensions = [];
+  let index = 0;
+  while (index < payload_bytes.length) {
+    if (payload_bytes.length - index < 5) break; //truncated header
+    let ext_id = payload_bytes[index];
+    let ext_len = uint_from_array(payload_bytes.subarray(index + 1, index + 5));
+    let end = index + 5 + ext_len;
+    if (end > payload_bytes.length) break; //truncated payload
+    extensions.push({
+      id: ext_id,
+      payload: payload_bytes.subarray(index + 5, end)
+    });
+    index = end;
+  }
+  return extensions;
+}
+
+//serialize a list of {id, payload} extension objects
+function serialize_extensions(extensions) {
+  let parts = [];
+  let total_length = 0;
+  for (let extension of extensions) {
+    let part = concat_uint8array(
+      array_from_uint(extension.id, 1),
+      array_from_uint(extension.payload.length, 4),
+      extension.payload
+    );
+    parts.push(part);
+    total_length += part.length;
+  }
+  let result = new Uint8Array(total_length);
+  let index = 0;
+  for (let part of parts) {
+    result.set(part, index);
+    index += part.length;
+  }
+  return result;
+}
+
+//construct a wisp v2 INFO packet for the initial handshake
+function create_info_packet(major_version, minor_version, extensions_bytes) {
+  let payload = concat_uint8array(
+    array_from_uint(major_version, 1),
+    array_from_uint(minor_version, 1),
+    extensions_bytes
+  );
+  return create_packet(packet_types.INFO, 0, payload);
+}
+
+//password auth client extension payload.
+//note: the v2 protocol spec omits the password length, but the reference
+//implementation (wasm-libcurl/wisp-js) sends a u16 password length here, so we
+//follow that format for wire compatibility:
+//[username_len u8][password_len u16 LE][username utf-8][password utf-8]
+function create_password_auth_extension(username, password) {
+  let username_array = new TextEncoder().encode(username || "");
+  let password_array = new TextEncoder().encode(password || "");
+  return {
+    id: extension_ids.PASSWORD_AUTH,
+    payload: concat_uint8array(
+      array_from_uint(username_array.length, 1),
+      array_from_uint(password_array.length, 2),
+      username_array,
+      password_array
+    )
+  };
+}
+
+function close_reason_to_string(reason) {
+  return close_reason_names[reason] || ("unknown close reason 0x" + reason.toString(16));
+}
+
 class WispStream extends EventTarget {
   constructor(hostname, port, websocket, buffer_size, stream_id, connection, stream_type) {
     super();
@@ -102,11 +238,13 @@ class WispStream extends EventTarget {
     if (this.buffer_size > 0 || !this.open || this.stream_type === 0x02) {
       //construct and send a DATA packet
       let packet = create_packet(0x02, this.stream_id, data);
-      this.ws.send(packet);
+      this.connection.ws.send(packet);
       this.buffer_size--;
     }
     else { //server is slow, don't send data yet
-      this.send_buffer.push(data);
+      //copy the payload so that later mutations of the caller's buffer don't
+      //corrupt data which is still waiting to be flushed
+      this.send_buffer.push(new Uint8Array(data));
     }
   }
 
@@ -122,55 +260,107 @@ class WispStream extends EventTarget {
   //construct and send a CLOSE packet
   close(reason = 0x01) {
     if (!this.open) return;
-    let payload = array_from_uint(reason, 1)
+    let payload = array_from_uint(reason, 1);
     let packet = create_packet(0x04, this.stream_id, payload);
-    this.ws.send(packet);
+    this.connection.ws.send(packet);
     this.open = false;
-    delete this.connection.active_streams[this.stream_id];
+    this.connection.close_stream(this, reason);
   }
 }
 
 class WispConnection extends EventTarget {
-  constructor(wisp_url) {
+  constructor(wisp_url, options) {
     super();
+    if (typeof wisp_url !== "string" || !wisp_url.endsWith("/")) {
+      throw "wisp endpoints must end with a trailing forward slash";
+    }
+    if (options === undefined || options === null) options = {};
+    if (options.wisp_version !== 1 && options.wisp_version !== 2) options.wisp_version = 2;
+
     this.wisp_url = wisp_url;
+    this.wisp_version = options.wisp_version;
+    this.wisp_extensions = options.wisp_extensions || null;
+    this.username = options.username || null;
+    this.password = options.password || null;
     this.max_buffer_size = null;
     this.active_streams = {};
     this.connected = false;
     this.connecting = false;
     this.next_stream_id = 1;
 
-    if (!this.wisp_url.endsWith("/")) {
-      throw "wisp endpoints must end with a trailing forward slash";
+    //wisp v2 handshake state
+    this.server_exts = {};
+    this.client_exts = {};
+    this.info_received = false;
+    this.server_motd = null;
+    this.udp_enabled = true;
+    this.handshake_rejected = false;
+
+    //when no extensions are supplied we advertise UDP + MOTD support, the
+    //common baseline shared by the wisp v2 reference implementations
+    if (this.wisp_version === 2 && this.wisp_extensions === null) {
+      this.wisp_extensions = [
+        { id: extension_ids.UDP, payload: new Uint8Array(0) },
+        { id: extension_ids.MOTD, payload: new Uint8Array(0) }
+      ];
     }
 
     this.connect_ws();
   }
 
   connect_ws() {
-    this.ws = new WebSocket(this.wisp_url);
+    let subprotocol = this.wisp_version === 2 ? "wisp-v2" : undefined;
+    this.ws = new WebSocket(this.wisp_url, subprotocol);
     this.ws.binaryType = "arraybuffer";
     this.connecting = true;
 
     this.ws.addEventListener("error", (event) => {
+      if (event.target !== this.ws) return; //stale event from a previous ws
+      if (this.try_v1_fallback()) return;
       this.on_ws_close();
       let error_event = new Event("error");
       this.dispatchEvent(error_event);
     });
-    this.ws.addEventListener("close", () => {
+    this.ws.addEventListener("close", (event) => {
+      if (event.target !== this.ws) return; //stale event from a previous ws
+      if (this.try_v1_fallback()) return;
+      if (this.handshake_rejected) {
+        this.handshake_rejected = false;
+        return; //the rejection was already reported as a close event
+      }
       this.on_ws_close();
       let close_event = new CloseEvent("close");
       this.dispatchEvent(close_event);
     });
     this.ws.addEventListener("message", (event) => {
+      if (event.target !== this.ws) return; //stale event from a previous ws
       this.on_ws_msg(event);
-      if (this.connecting) {
-        this.connected = true;
+      if (this.connected && this.connecting) {
         this.connecting = false;
         let open_event = new Event("open");
         this.dispatchEvent(open_event);
       }
     });
+  }
+
+  //the websocket fired an error/close before the handshake completed: the
+  //server likely rejected the wisp-v2 subprotocol, so retry as a v1 connection
+  try_v1_fallback() {
+    if (this.wisp_version !== 2) return false;
+    if (this.info_received || this.connected) return false;
+    warn_msg("wisp client warning: server does not support wisp v2, falling back to v1");
+    this.wisp_version = 1;
+    this.udp_enabled = true;
+    this.connecting = false;
+    this.connect_ws();
+    return true;
+  }
+
+  //close the underlying websocket
+  close() {
+    if (this.ws && this.ws.readyState && this.ws.readyState !== WebSocket.CLOSED) {
+      this.ws.close();
+    }
   }
 
   close_stream(stream, reason) {
@@ -184,13 +374,16 @@ class WispConnection extends EventTarget {
     this.connected = false;
     this.connecting = false;
     for (let stream_id of Object.keys(this.active_streams)) {
-      this.close_stream(this.active_streams[stream_id], 0x03);
+      this.close_stream(this.active_streams[stream_id], close_reasons.NETWORK_ERROR);
     }
   }
 
   create_stream(hostname, port, type="tcp") {
     let stream_type = type === "udp" ? 0x02 : 0x01;
-    let stream_id = this.next_stream_id
+    if (stream_type === 0x02 && !this.udp_enabled) {
+      throw new Error("udp is not enabled for this wisp connection");
+    }
+    let stream_id = this.next_stream_id;
     this.next_stream_id++;
     let stream = new WispStream(hostname, port, this.ws, this.max_buffer_size, stream_id, this, stream_type);
     stream.open = this.connected;
@@ -200,63 +393,143 @@ class WispConnection extends EventTarget {
     let port_array = array_from_uint(port, 2);
     let host_array = new TextEncoder().encode(hostname);
     let payload = concat_uint8array(type_array, port_array, host_array);
-    let packet = create_packet(0x01, stream_id, payload);
+    let packet = create_packet(packet_types.CONNECT, stream_id, payload);
 
     this.active_streams[stream_id] = stream;
     this.ws.send(packet);
     return stream;
   }
 
-  on_ws_msg(event) {
-    let packet = new Uint8Array(event.data);
+  //handle a wisp v2 INFO packet received during the handshake
+  handle_info(payload) {
+    if (payload.length < 2) {
+      warn_msg("wisp client warning: received a malformed INFO packet");
+      return;
+    }
+    let server_major = payload[0];
+    let server_minor = payload[1];
+    let server_extension_list = parse_extensions(payload.subarray(2));
+    if (server_major > 2) {
+      warn_msg(`wisp client warning: server uses wisp v${server_major}.${server_minor}, which is newer than this client`);
+    }
 
-    if (packet.length < 5) {
-      warn_msg(`wisp client warning: received a packet which is too short`);
+    //negotiate the extensions which both sides support
+    this.server_exts = {};
+    this.client_exts = {};
+    for (let client_ext of this.wisp_extensions) {
+      for (let server_ext of server_extension_list) {
+        if (server_ext.id === client_ext.id) {
+          this.server_exts[server_ext.id] = server_ext;
+          this.client_exts[server_ext.id] = client_ext;
+        }
+      }
+    }
+
+    this.info_received = true;
+    this.server_motd = null;
+    if (this.server_exts[extension_ids.MOTD]) {
+      this.server_motd = new TextDecoder().decode(this.server_exts[extension_ids.MOTD].payload);
+      warn_msg(`wisp server MOTD: ${this.server_motd}`);
+    }
+    this.udp_enabled = !!this.server_exts[extension_ids.UDP];
+
+    //password auth is an intrinsic client capability: even when it is absent
+    //from wisp_extensions, credentials are attached to our INFO reply whenever
+    //the server supports the extension and we were given a username
+    let client_extensions = this.wisp_extensions.slice();
+    if (this.username !== null && server_extension_list.some(ext => ext.id === extension_ids.PASSWORD_AUTH)) {
+      client_extensions.push(create_password_auth_extension(this.username, this.password));
+    }
+
+    let extensions_bytes = serialize_extensions(client_extensions);
+    let info_packet = create_info_packet(2, 0, extensions_bytes);
+    this.ws.send(info_packet);
+  }
+
+  on_ws_msg(event) {
+    let buffer = new Uint8Array(event.data);
+
+    if (buffer.length < 5) {
+      warn_msg("wisp client warning: received a packet which is too short");
       return;
     }
 
-    let packet_type = packet[0];
-    let stream_id = uint_from_array(packet.slice(1, 5));
-    let payload = packet.slice(5);
+    let packet_type = buffer[0];
+    let stream_id = uint_from_array(buffer.subarray(1, 5));
+    let payload = buffer.subarray(5);
+
+    //packets for stream 0 are part of the connection handshake
+    if (stream_id === 0) {
+      if (packet_type === packet_types.INFO && this.wisp_version === 2) {
+        this.handle_info(payload);
+      }
+      else if (packet_type === packet_types.CONTINUE) {
+        if (payload.length < 4) {
+          warn_msg("wisp client warning: received a malformed CONTINUE packet");
+          return;
+        }
+        if (!this.info_received) {
+          //no INFO packet was ever received, so this server only speaks v1
+          this.wisp_version = 1;
+          this.udp_enabled = true;
+        }
+        this.max_buffer_size = uint_from_array(payload.subarray(0, 4));
+        this.connected = true;
+      }
+      else if (packet_type === packet_types.CLOSE && this.connecting) {
+        //the server rejected our handshake (incompatible extensions, auth
+        //failure, etc), so the websocket must be torn down
+        let reason = payload.length > 0 ? payload[0] : close_reasons.UNKNOWN;
+        error_msg(`wisp connection rejected by server: ${close_reason_to_string(reason)}`);
+        this.handshake_rejected = true;
+        this.on_ws_close();
+        let close_event = new CloseEvent("close", { code: reason });
+        this.dispatchEvent(close_event);
+        if (this.ws) this.ws.close();
+      }
+      return;
+    }
+
     let stream = this.active_streams[stream_id];
 
-    if (typeof stream === "undefined" && stream_id !== 0) {
+    if (typeof stream === "undefined") {
       warn_msg(`wisp client warning: received a ${packet_names[packet_type]} packet for a stream which doesn't exist`);
       return;
     }
 
     if (packet_type === packet_types.DATA) { //DATA packets
-      let msg_event = new MessageEvent("message", { data: payload });
+      //deliver a copy (not a view) so that event.data.buffer / new Blob() in
+      //the DOM websocket polyfill exactly match the original payload bytes
+      let msg_event = new MessageEvent("message", { data: payload.slice() });
       stream.dispatchEvent(msg_event);
     }
 
-    else if (packet_type === packet_types.CONTINUE && stream_id == 0) { //initial CONTINUE packet
-      this.max_buffer_size = uint_from_array(payload);
-    }
-
     else if (packet_type === packet_types.CONTINUE) { //other CONTINUE packets
-      stream.continue_received(uint_from_array(payload));
+      if (payload.length < 4) {
+        warn_msg("wisp client warning: received a malformed CONTINUE packet");
+        return;
+      }
+      stream.continue_received(uint_from_array(payload.subarray(0, 4)));
     }
 
     else if (packet_type === packet_types.CLOSE) { //CLOSE packets
-      this.close_stream(stream, payload[0]);
+      this.close_stream(stream, payload.length > 0 ? payload[0] : close_reasons.UNKNOWN);
     }
 
     else {
       warn_msg(`wisp client warning: receive an invalid packet of type ${packet_type}`);
     }
   }
-}
-
-//polyfill the DOM Websocket API so that applications using wsproxy can easily use wisp with minimal changes
+}//polyfill the DOM Websocket API so that applications using wsproxy can easily use wisp with minimal changes
 
 const _wisp_connections = {};
 
 class WispWebSocket extends EventTarget {
-  constructor(url, protocols) {
+  constructor(url, protocols, options) {
     super();
     this.url = url;
-    this.protocols = protocols
+    this.protocols = protocols;
+    this.options = options || {};
     this.binaryType = "blob";
     this.stream = null;
     this.event_listeners = {};
@@ -272,7 +545,7 @@ class WispWebSocket extends EventTarget {
     this.OPEN = 1;
     this.CLOSING = 2;
     this.CLOSED = 3;
-    
+
     //parse the wsproxy url
     let url_split = this.url.split("/");
     let wsproxy_path = url_split.pop().split(":");
@@ -296,15 +569,15 @@ class WispWebSocket extends EventTarget {
     this.connection = _wisp_connections[this.real_url];
 
     if (!this.connection) {
-      this.connection = new WispConnection(this.real_url);
+      this.connection = new WispConnection(this.real_url, this.options);
       this.connection.addEventListener("open", () => {
         this.init_stream();
-      })
+      });
       this.connection.addEventListener("close", () => {this.on_conn_close()});
       this.connection.addEventListener("error", () => {this.on_conn_close()});
       _wisp_connections[this.real_url] = this.connection;
     }
-    else if (!this.connection.connected) {
+    else if (!this.connection.connected && this.connection.connecting) {
       this.connection.addEventListener("open", () => {
         this.init_stream();
       });
@@ -349,30 +622,27 @@ class WispWebSocket extends EventTarget {
     }
     else if (data instanceof Blob) {
       data.arrayBuffer().then(array_buffer => {
-        data_array = new Uint8Array(array_buffer);
-        this.send(data_array);
+        this.send(array_buffer);
       });
       return;
     }
-    //any typedarray
+    //any ArrayBuffer or DataView
     else if (data instanceof ArrayBuffer) {
-      //dataview objects
       if (ArrayBuffer.isView(data) && data instanceof DataView) {
         data_array = new Uint8Array(data.buffer);
       }
-      //regular arraybuffers
       else {
         data_array = new Uint8Array(data);
       }
     }
     //regular typed arrays
     else if (ArrayBuffer.isView(data)) {
-      data_array = Uint8Array.from(data);
+      data_array = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     }
     else {
       throw "invalid data type";
     }
-    
+
     if (!this.stream) {
       throw "websocket is not ready";
     }
@@ -396,6 +666,9 @@ class WispWebSocket extends EventTarget {
   }
 
   get protocol() {
+    if (this.connection && this.connection.wisp_version === 2) {
+      return "wisp-v2";
+    }
     return "binary";
   }
 
@@ -1398,8 +1671,8 @@ var wasm_ready = false;
 var version_dict = null;
 var api = null;
 var main_session = null;
-const libcurl_version = "0.7.4";
-const wisp_version = "1.1.1";
+const libcurl_version = "0.8.0";
+const wisp_version = "2.0.0";
 
 function check_loaded(check_websocket) {
   if (!wasm_ready) {
