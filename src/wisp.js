@@ -228,6 +228,7 @@ export class WispConnection {
       await new Promise(resolve => stream.waiters.push(resolve))
     }
     if (stream.closed) return
+    stream.last_activity = Date.now()
     stream.queue.push(data)
     this.pump_stream(stream_id)
   }
@@ -308,6 +309,7 @@ export class WispConnection {
 
       let data_packet = create_packet(packet_types.DATA, stream_id, data)
       stream.out_queue.push(data_packet)
+      stream.last_activity = Date.now()
       metrics.observe_out_queue(stream.out_queue.length)
       this.drain_downstream(stream_id)
     }
@@ -473,13 +475,36 @@ export class WispConnection {
         out_queue: [],
         out_waiters: [],
         out_draining: false,
-        stalled_at: null
+        stalled_at: null,
+        //last wisp-level activity (inbound/outbound DATA or a close), used by
+        //_sweep_idle_streams to reclaim silent streams with TRANSFER_TIMEOUT
+        last_activity: Date.now()
       }
       await this.new_stream(stream_id, payload)
     } else if (packet_type == packet_types.DATA) {
       await this.queue_ws_data(stream_id, payload)
     } else if (packet_type == packet_types.CLOSE) {
+      let stream = this.active_streams[stream_id]
+      if (stream) stream.last_activity = Date.now()
       this.close_stream(stream_id)
+    }
+
+    //lazy idle sweep: reclaim streams whose wisp-level activity stopped long
+    //ago. runs on inbound packets, so it costs nothing when a connection is
+    //active; fully silent sockets are reclaimed by the per-socket idleTimeout.
+    if (config.stream_idle_timeout > 0) this._sweep_idle_streams()
+  }
+
+  //close streams with no wisp-level activity past config.stream_idle_timeout.
+  //TRANSFER_TIMEOUT tells the client the peer went quiet rather than letting
+  //the stream sit open forever on an unrelated-but-busy connection.
+  _sweep_idle_streams() {
+    let now = Date.now()
+    for (let stream_id of Object.keys(this.active_streams)) {
+      let stream = this.active_streams[stream_id]
+      if (stream.closed || now - stream.last_activity <= config.stream_idle_timeout) continue
+      this.send_close_packet(Number(stream_id), close_reasons.TRANSFER_TIMEOUT).catch(() => {})
+      this.close_stream(Number(stream_id))
     }
   }
 

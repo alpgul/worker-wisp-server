@@ -39,7 +39,15 @@ const config = {
   //no server->client flow control, so without this a stalled client fills
   //cloudflare's ws buffers and the connection dies with a late, unexplained
   //NETWORK_ERROR instead.
-  downstream_stall_timeout: 10000
+  downstream_stall_timeout: 10000,
+  //close a stream whose wisp-level activity is older than this (ms) - swept
+  //lazily on inbound packets. 0 disables the stream-level sweep; the per-socket
+  //idleTimeout below still reclaims each socket.
+  stream_idle_timeout: 120000,
+  //idleTimeout passed to socket.connect() (ms). cloudflare's mode default is
+  //7 minutes; a shorter value makes silent sockets self-close and error early
+  //instead of holding connections open. 0 disables (platform default).
+  socket_idle_timeout: 60000
 }
 
 function env_bool(env, name, default_value) {
@@ -83,6 +91,8 @@ export function apply_env(env) {
   config.enforce_https = env_bool(env, "ENFORCE_HTTPS", true)
   config.downstream_buffer = env_num(env, "DOWNSTREAM_BUFFER", 512)
   config.downstream_stall_timeout = env_num(env, "DOWNSTREAM_STALL_TIMEOUT", 10000)
+  config.stream_idle_timeout = env_num(env, "STREAM_IDLE_TIMEOUT", 120000)
+  config.socket_idle_timeout = env_num(env, "SOCKET_IDLE_TIMEOUT", 60000)
 }
 
 export { config }

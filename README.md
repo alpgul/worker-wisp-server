@@ -68,6 +68,8 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `ENFORCE_HTTPS`         | `true` | Refuse plain-text entry points: `ws://` upgrades get `426` (browsers do not follow redirects on upgrades) and `http://` page loads get a `308` redirect to `https://`. `localhost`/loopback is always exempt so the local dev server keeps working. |
 | `DOWNSTREAM_BUFFER`     | `512` | Max tcp→ws DATA packets buffered per stream before the downstream (client) is considered stalled. `0` disables the bound (direct unbounded sends). |
 | `DOWNSTREAM_STALL_TIMEOUT` | `10000` | How long (ms) a full downstream buffer may persist before the stream is proactively closed with `0x03`. |
+| `STREAM_IDLE_TIMEOUT`  | `120000` | Lazy per-stream liveness (ms). Streams with no wisp activity (client DATA, server DATA, CLOSE) past this are closed with `CLOSE 0x47` the next time the connection receives any inbound packet. `0` disables the sweep. |
+| `SOCKET_IDLE_TIMEOUT`  | `60000` | Idle timeout (ms) passed to `socket.connect()`. A fully quiet upstream socket self-closes here instead of holding a connection at Cloudflare's ~7-minute default; the tcp reader sees that as EOF and closes the stream with `CLOSE 0x02`. `0` keeps the platform default. |
 
 Both authentication variables must be set for auth to be enabled. Failed auth (`0xc0`/`0xc2`) and blocked destinations (`0x48`) end the stream/connection with the corresponding Wisp close reason.
 
@@ -80,6 +82,8 @@ Credentials and traffic must never cross the network in clear text, so productio
 ### Slow downstream clients
 
 Wisp only has client→server flow control (CONTINUE credits); there is no way for the server to tell a client to slow down. A client that stops consuming would otherwise fill Cloudflare's websocket buffers until the connection dies with a late, unexplained error. The worker instead keeps a bounded per-stream outbound queue (`DOWNSTREAM_BUFFER`): the TCP reader pauses while it is full (TCP backpressure reaches the remote producer), and if the queue stays full past `DOWNSTREAM_STALL_TIMEOUT` the stream is proactively closed with `0x03`.
+
+Liveness completes the picture: `connect()` gets an explicit `SOCKET_IDLE_TIMEOUT`, while the connection-level sweep (`STREAM_IDLE_TIMEOUT`, run lazily on inbound packets) reclaims streams that stay silent, closing them with `0x47` so a peer that went quiet doesn't pin a stream forever. Clients that want the server to notice a dead connection should send a periodic keepalive (`keepalive_interval` in wisp.js) so the sweep is triggered by the stream's own liveness clock.
 
 The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee.
 

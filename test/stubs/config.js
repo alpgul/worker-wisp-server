@@ -12,5 +12,7 @@ export const config = {
   auth_password: null,
   enforce_https: false,
   downstream_buffer: 512,
-  downstream_stall_timeout: 10000
+  downstream_stall_timeout: 10000,
+  stream_idle_timeout: 0,
+  socket_idle_timeout: 0
 }

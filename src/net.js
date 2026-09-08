@@ -112,11 +112,15 @@ export class TCPConnection {
   async connect() {
     //default connector = real outbound TCP from the cloudflare edge, no plan
     //restrictions. a socket is returned immediately; connection errors surface
-    //on the first read/write instead of being thrown here.
+    //on the first read/write instead of being thrown here. an explicit
+    //idleTimeout (config.socket_idle_timeout) makes silent sockets self-close
+    //with a read error instead of holding a connection at the platform's
+    //default (~7 min); 0 keeps the platform default.
     this.socket = connect({
       hostname: this.hostname,
       port: this.port,
-      allowHalfOpen: false
+      allowHalfOpen: false,
+      idleTimeout: config.socket_idle_timeout > 0 ? config.socket_idle_timeout : undefined
     })
     this.reader = this.socket.readable.getReader()
     this.writer = this.socket.writable.getWriter()

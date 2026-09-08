@@ -744,3 +744,82 @@ test("draining a stalled stream resumes delivery without closing", async () => {
     config.downstream_stall_timeout = origTimeout
   }
 })
+
+test("idle sweep reclaims streams silent past stream_idle_timeout with 0x47", async () => {
+  const origTimeout = config.stream_idle_timeout
+  config.stream_idle_timeout = 50
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+    assert.ok(stream, "stream opened")
+
+    //make stream 1 look idle, then an unrelated inbound packet runs the sweep
+    stream.last_activity = Date.now() - 1000
+    await wisp.handle_ws_message(msg(new Uint8Array([0x02, 0x02, 0x00, 0x00, 0x00, 0x68, 0x69]))) //DATA stream 2
+    await tick()
+
+    const close1 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1)
+    assert.ok(close1, "idle stream closed")
+    assert.equal(close1[5], 0x47, "reason is TRANSFER_TIMEOUT")
+    assert.equal(stream.closed, true, "stream entry is torn down")
+  } finally {
+    config.stream_idle_timeout = origTimeout
+  }
+})
+
+test("idle sweep spares streams with recent activity", async () => {
+  const origTimeout = config.stream_idle_timeout
+  config.stream_idle_timeout = 50
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+
+    //fresh activity then an unrelated inbound packet -> nothing swept
+    streamOf(wisp, 1).last_activity = Date.now() - 10
+    await wisp.handle_ws_message(msg(new Uint8Array([0x02, 0x02, 0x00, 0x00, 0x00, 0x68, 0x69]))) //DATA stream 2
+    await tick()
+
+    const close1 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1)
+    assert.equal(close1, undefined, "active stream stays open")
+    wisp.close_all()
+  } finally {
+    config.stream_idle_timeout = origTimeout
+  }
+})
+
+test("stream activity (client data) resets the idle clock", async () => {
+  const origTimeout = config.stream_idle_timeout
+  config.stream_idle_timeout = 50
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+
+    const stream = streamOf(wisp, 1)
+    const staleBefore = () => Date.now() - stream.last_activity > config.stream_idle_timeout
+
+    //force the stream old, then a client DATA packet refreshes last_activity
+    stream.last_activity = Date.now() - 5000
+    await wisp.handle_ws_message(msg(new Uint8Array([0x02, 0x01, 0x00, 0x00, 0x00, 0x68, 0x69]))) //DATA "hi" stream 1
+    await tick()
+    assert.ok(!staleBefore(), "client data refreshed the idle clock")
+
+    //now let it go stale and sweep with an unrelated inbound packet
+    stream.last_activity = Date.now() - 1000
+    await wisp.handle_ws_message(msg(new Uint8Array([0x02, 0x02, 0x00, 0x00, 0x00, 0x68, 0x69]))) //DATA stream 2
+    await tick()
+    const close1 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1)
+    assert.ok(close1 && close1[5] === 0x47, "idle stream closed with TRANSFER_TIMEOUT")
+  } finally {
+    config.stream_idle_timeout = origTimeout
+  }
+})
