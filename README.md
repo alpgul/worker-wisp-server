@@ -54,6 +54,7 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | ----------------------- | ------- | ------------------------------------- |
 | `RATELIMIT_ENABLED`     | `false` | Enable the fixed-window rate limiter. |
 | `RATELIMIT_CONNECTIONS` | `30`    | Max new streams per IP per window.    |
+| `RATELIMIT_AUTH_FAILURES`| `5`    | Max failed password handshakes per IP per window, then close with 0x49. |
 | `RATELIMIT_WINDOW`      | `60`    | Window length in seconds.             |
 | `STREAM_LIMIT_TOTAL`    | `50`    | Max concurrent streams per WebSocket connection. |
 | `ALLOW_LOOPBACK`        | `false` | `true` allows connections to loopback IPs. |

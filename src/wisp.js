@@ -303,6 +303,22 @@ export class WispConnection {
     try { this.ws.close() } catch (e) { /* ignore */ }
   }
 
+  //reject a v2 handshake that failed password auth. when rate limiting is
+  //enabled, consecutive failures from the same ip are counted against the
+  //per-window limit and eventually close with 0x49 (throttled).
+  async reject_auth(reason) {
+    if (ratelimit.enabled) {
+      let failures = inc_client_attr(this.client_ip, "auth_failures")
+      if (failures > ratelimit.auth_fail_limit) {
+        await this.send_close_packet(0, close_reasons.CONN_THROTTLED)
+        this.terminate()
+        return
+      }
+    }
+    await this.send_close_packet(0, reason)
+    this.terminate()
+  }
+
   //handle the client's INFO packet (v2 handshake). accepted connections get an
   //opening CONTINUE(0); rejected ones get a CLOSE(0) followed by a websocket
   //close. the reason codes are defined in the protocol spec.
@@ -331,13 +347,11 @@ export class WispConnection {
         auth = parse_password_auth(client_auth.payload)
       }
       if (!auth) {
-        await this.send_close_packet(0, close_reasons.AUTH_MISSING_CREDENTIALS)
-        this.terminate()
+        await this.reject_auth(close_reasons.AUTH_MISSING_CREDENTIALS)
         return
       }
       if (auth.username !== config.auth_username || auth.password !== config.auth_password) {
-        await this.send_close_packet(0, close_reasons.AUTH_BAD_PASSWORD)
-        this.terminate()
+        await this.reject_auth(close_reasons.AUTH_BAD_PASSWORD)
         return
       }
     }

@@ -13,6 +13,7 @@ import assert from "node:assert/strict"
 import { WispConnection } from "../src/wisp.js"
 import { create_packet, array_from_uint, create_info_packet, serialize_extensions, bytes_to_str } from "../src/util.js"
 import { config } from "./stubs/config.js"
+import { ratelimit } from "./stubs/ratelimit.js"
 import { TCPConnection } from "./stubs/net.js"
 
 const queue_size = 128
@@ -440,6 +441,31 @@ test("wisp v2 password auth: bad credentials close with 0xc0", async () => {
   } finally {
     config.auth_username = null
     config.auth_password = null
+  }
+})
+
+test("wisp v2 password auth: repeated failures from one ip are throttled with 0x49", async () => {
+  config.auth_username = "alice"
+  config.auth_password = "s3cr3t"
+  ratelimit.enabled = true
+  ratelimit.auth_fail_limit = 2
+  try {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const ws = makeWs()
+      const wisp = new WispConnection(ws, "/", "127.0.0.1", 2)
+      wisp.setup()
+
+      await wisp.handle_ws_message(msg(clientInfoPacket([{ id: 0x05, payload: new Uint8Array(0) }])))
+      const closeMsg = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 0)
+      assert.ok(closeMsg, `CLOSE(0) emitted on attempt ${attempt}`)
+      assert.equal(closeMsg[5], attempt > ratelimit.auth_fail_limit ? 0x49 : 0xc2,
+        `attempt ${attempt} past the limit closes with 0x49 throttled`)
+      assert.equal(ws.handler.closed, true, "websocket closed after auth failure")
+    }
+  } finally {
+    config.auth_username = null
+    config.auth_password = null
+    ratelimit.enabled = false
   }
 })
 

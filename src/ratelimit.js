@@ -11,6 +11,8 @@ const ratelimit = {
   enabled: false,
   //max new streams per ip per window
   connections_limit: 30,
+  //max failed password-handshakes per ip per window, before closing with 0x49
+  auth_fail_limit: 5,
   //fixed window size, in seconds
   window_size: 60
 }
@@ -34,6 +36,7 @@ function env_num(env, name, default_value) {
 export function apply_env(env) {
   ratelimit.enabled = env_bool(env, "RATELIMIT_ENABLED", false)
   ratelimit.connections_limit = env_num(env, "RATELIMIT_CONNECTIONS", 30)
+  ratelimit.auth_fail_limit = env_num(env, "RATELIMIT_AUTH_FAILURES", 5)
   ratelimit.window_size = env_num(env, "RATELIMIT_WINDOW", 60)
 }
 
@@ -41,6 +44,7 @@ function init_client(client_ip) {
   if (!client_ip || active_clients.has(client_ip)) return
   active_clients.set(client_ip, {
     streams: 0, //number of newly created streams
+    auth_failures: 0, //number of failed password handshakes
     start: Date.now() / 1000
   })
 }

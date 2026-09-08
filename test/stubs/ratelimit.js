@@ -4,6 +4,7 @@ const clients = new Map()
 export const ratelimit = {
   enabled: false,
   connections_limit: 30,
+  auth_fail_limit: 5,
   window_size: 60
 }
 
