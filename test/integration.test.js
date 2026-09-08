@@ -171,6 +171,8 @@ function makeClient(clientWs, options) {
     MessageEvent: FakeEvent,
     TextEncoder,
     TextDecoder,
+    setTimeout,
+    clearTimeout,
     warn_msg: () => {},
     error_msg: () => {}
   }
@@ -185,6 +187,9 @@ function makeClient(clientWs, options) {
 //lets the test drive the handshake manually so it can attach listeners before
 //the (possibly rejecting) server INFO exchange runs.
 function openPair({ wispVersion = 2, clientAutoReplay = true, motd = null, auth = null, clientOptions = {} } = {}) {
+  //handshake timers are disabled unless a test opts into one, so the suite is
+  //not kept alive by pending timeouts
+  const mergedClientOptions = { handshake_timeout: 0, ...clientOptions }
   config.wisp_motd = motd
   config.auth_username = auth ? auth.username : null
   config.auth_password = auth ? auth.password : null
@@ -201,7 +206,7 @@ function openPair({ wispVersion = 2, clientAutoReplay = true, motd = null, auth 
   })
   serverWs.addEventListener("close", () => server.close_all())
   server.setup()
-  h.client = makeClient(clientWs, clientOptions)
+  h.client = makeClient(clientWs, mergedClientOptions)
   return h
 }
 
