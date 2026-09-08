@@ -9,5 +9,6 @@ export const config = {
   stream_limit_total: 50,
   wisp_motd: null,
   auth_username: null,
-  auth_password: null
+  auth_password: null,
+  enforce_https: false
 }

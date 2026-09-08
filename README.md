@@ -65,8 +65,13 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `WISP_MOTD`             | *(none)* | Wisp v2 MOTD sent during the handshake. |
 | `WISP_AUTH_USERNAME`    | *(none)* | Enables Wisp v2 password auth; matching credentials are required. |
 | `WISP_AUTH_PASSWORD`    | *(none)* | The expected password (store via `wrangler secret`). |
+| `ENFORCE_HTTPS`         | `true` | Refuse plain-text entry points: `ws://` upgrades get `426` (browsers do not follow redirects on upgrades) and `http://` page loads get a `308` redirect to `https://`. `localhost`/loopback is always exempt so the local dev server keeps working. |
 
 Both authentication variables must be set for auth to be enabled. Failed auth (`0xc0`/`0xc2`) and blocked destinations (`0x48`) end the stream/connection with the corresponding Wisp close reason.
+
+### Transport security
+
+Credentials and traffic must never cross the network in clear text, so production is assumed to be served behind TLS: point clients at `wss://<your-worker>....workers.dev/`. By default the worker enforces this — set `ENFORCE_HTTPS=false` only for private, HTTP-only deployments (e.g. a LAN test server).
 
 > Password-auth wire format: the v2 protocol spec omits the password length, but the reference implementation ([wisp-js](https://github.com/wasm-libcurl/wisp-js)) sends a `u16` password length in the client credentials. This worker follows the wisp-js layout (`[username_len u8][password_len u16 LE][username][password]`) for interoperability.
 

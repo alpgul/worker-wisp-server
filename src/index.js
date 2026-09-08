@@ -12,8 +12,37 @@
 //in the 101 response so the browser negotiates it successfully.
 
 import { WispConnection, WSProxyConnection } from "./wisp.js"
-import { apply_env as apply_config } from "./config.js"
+import { apply_env as apply_config, config } from "./config.js"
 import { ratelimit, get_client_attr, inc_client_attr, apply_env, start_cleanup } from "./ratelimit.js"
+
+//tls hygiene policy. returns null when the request may proceed, otherwise a
+//Response that short-circuits it.
+//
+//credentials and traffic must never cross the network in clear text, so any
+//non-localhost endpoint reached over a plain scheme is refused: websocket
+//upgrades get 426 (browsers do not follow 3xx on upgrades) and plain page
+//loads get a permanent 308 redirect to the https url.
+//
+//localhost/loopback is always exempt: the local dev server has no tls
+//terminator, and tests run over plain http too.
+export function https_policy(request, url, enforce_https) {
+  if (!enforce_https) return null
+  const host = url.hostname
+  if (host === "localhost" || host === "127.0.0.1" || host === "0:0:0:0:0:0:0:1" || host === "::1") return null
+
+  //cloudflare (and reverse proxies) declare the client-facing scheme here;
+  //absent that, fall back to the url scheme, which is also the real one under
+  //wrangler dev.
+  const proto = (request.headers.get("x-forwarded-proto") || url.protocol).replace(":", "")
+  if (proto === "https" || proto === "wss") return null
+
+  const upgrade = request.headers.get("Upgrade")
+  if (upgrade && upgrade.toLowerCase() === "websocket") {
+    return new Response("websocket connection refused: wss:// is required", { status: 426 })
+  }
+  url.protocol = "https:"
+  return Response.redirect(url.toString(), 308)
+}
 
 function get_client_ip(request) {
   let ip = request.cf?.connectingIpAddress
@@ -95,6 +124,9 @@ export default {
 
     let url = new URL(request.url)
     let upgrade = request.headers.get("Upgrade")
+
+    const blocked = https_policy(request, url, config.enforce_https)
+    if (blocked) return blocked
 
     if (upgrade && upgrade.toLowerCase() === "websocket") {
       let subprotocol = select_subprotocol(request)

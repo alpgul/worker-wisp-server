@@ -26,7 +26,11 @@ const config = {
   wisp_motd: null,
   //wisp v2 password auth. auth is only enabled when both values are set.
   auth_username: null,
-  auth_password: null
+  auth_password: null,
+  //when true, plain-text entry points are refused: websocket upgrades over
+  //insecure schemes get 426 and plain http page loads redirect to https.
+  //localhost/loopback is always exempt so the local dev server keeps working.
+  enforce_https: true
 }
 
 function env_bool(env, name, default_value) {
@@ -67,6 +71,7 @@ export function apply_env(env) {
   config.wisp_motd = env_str(env, "WISP_MOTD", null)
   config.auth_username = env_str(env, "WISP_AUTH_USERNAME", null)
   config.auth_password = env_str(env, "WISP_AUTH_PASSWORD", null)
+  config.enforce_https = env_bool(env, "ENFORCE_HTTPS", true)
 }
 
 export { config }
