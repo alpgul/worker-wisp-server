@@ -85,7 +85,7 @@ The protocol core is unit-tested on plain node (no Cloudflare runtime needed). T
 npm test
 ```
 
-The suite covers the v1 flow, the v2 handshake (INFO exchange, version mismatch, extension negotiation, stream-open confirmation), password auth, blocklists, per-connection stream caps, backpressure and early data sent while a socket is still connecting.
+The suite covers the v1 flow, the v2 handshake (INFO exchange, version mismatch, extension negotiation, stream-open confirmation), password auth, blocklists, per-connection stream caps, backpressure, early data sent while a socket is still connecting, and the HTTP(S) hygiene policy (`308`/`426` on plain-text entry points, loopback exemption, `ENFORCE_HTTPS` toggle).
 
 ## Routes
 
