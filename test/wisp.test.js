@@ -532,6 +532,33 @@ test("hostname and port blocklists close with 0x48", async () => {
   }
 })
 
+test("destination allowlist refuses hosts not in ALLOW_HOSTNAME", async () => {
+  const ws = makeWs()
+  const wisp = new WispConnection(ws, "/", "127.0.0.1")
+  wisp.setup()
+
+  config.hostname_allowlist = ["example.com"]
+  try {
+    //allowlisted: exact match and subdomains are accepted
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await wisp.handle_ws_message(msg(connectPacket(2, "www.example.com", 80)))
+    await tick()
+    const close1 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1)
+    const close2 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 2)
+    assert.equal(close1, undefined, "allowlisted hostname opens")
+    assert.equal(close2, undefined, "allowlisted subdomain opens")
+
+    //everything else is refused with 0x48
+    await wisp.handle_ws_message(msg(connectPacket(3, "evil.com", 80)))
+    await tick()
+    const close3 = ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 3)
+    assert.ok(close3, "non-allowlisted hostname closed")
+    assert.equal(close3[5], 0x48, "reason is HOST_BLOCKED")
+  } finally {
+    config.hostname_allowlist = []
+  }
+})
+
 test("invalid stream information closes with 0x41", async () => {
   const ws = makeWs()
   const wisp = new WispConnection(ws, "/", "127.0.0.1")

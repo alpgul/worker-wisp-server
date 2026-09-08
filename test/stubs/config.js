@@ -4,6 +4,7 @@ export const config = {
   block_private: false,
   block_udp: true,
   hostname_blocklist: [],
+  hostname_allowlist: [],
   port_blocklist: [],
   stream_limit_total: 50,
   wisp_motd: null,

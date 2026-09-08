@@ -45,6 +45,19 @@ export function validate_hostname(host, port) {
       throw new HostBlockedError(`Connection to ${host} blocked by server policy.`)
     }
   }
+  if (config.hostname_allowlist.length > 0) {
+    let allowed = false
+    for (let allowed_host of config.hostname_allowlist) {
+      let a = allowed_host.toLowerCase()
+      if (host_lower === a || host_lower.endsWith("." + a)) {
+        allowed = true
+        break
+      }
+    }
+    if (!allowed) {
+      throw new HostBlockedError(`Connection to ${host} refused: destination not in allowlist.`)
+    }
+  }
   if (config.port_blocklist.includes(port)) {
     throw new HostBlockedError(`Connection to port ${port} blocked by server policy.`)
   }

@@ -59,6 +59,7 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `ALLOW_LOOPBACK`        | `false` | `true` allows connections to loopback IPs. |
 | `ALLOW_PRIVATE`         | `false` | `true` allows connections to private IPs.  |
 | `HOSTNAME_BLACKLIST`    | *(empty)* | Comma-separated hostnames to refuse with `CLOSE 0x48` (matches the host and its subdomains). |
+| `ALLOW_HOSTNAME`        | *(empty)* | Optional allowlist. When set, only these hostnames (and their subdomains) are accepted; everything else is refused with `CLOSE 0x48`. IP literals must match an entry verbatim. |
 | `PORT_BLACKLIST`        | *(empty)* | Comma-separated ports to refuse with `CLOSE 0x48`. |
 | `WISP_MOTD`             | *(none)* | Wisp v2 MOTD sent during the handshake. |
 | `WISP_AUTH_USERNAME`    | *(none)* | Enables Wisp v2 password auth; matching credentials are required. |

@@ -15,6 +15,9 @@ const config = {
   block_udp: true,
   //hostnames (and their subdomains) which are refused with close reason 0x48
   hostname_blocklist: [],
+  //optional allowlist. when non-empty, only these hostnames (and their
+  //subdomains) are accepted; everything else is refused with close reason 0x48
+  hostname_allowlist: [],
   //ports which are refused with close reason 0x48
   port_blocklist: [],
   //maximum number of simultaneously open streams per websocket connection
@@ -58,6 +61,7 @@ export function apply_env(env) {
   config.block_loopback = !env_bool(env, "ALLOW_LOOPBACK", false)
   config.block_private = !env_bool(env, "ALLOW_PRIVATE", false)
   config.hostname_blocklist = env_list(env, "HOSTNAME_BLACKLIST")
+  config.hostname_allowlist = env_list(env, "ALLOW_HOSTNAME")
   config.port_blocklist = env_list(env, "PORT_BLACKLIST").map(Number).filter(n => !isNaN(n))
   config.stream_limit_total = env_num(env, "STREAM_LIMIT_TOTAL", 50)
   config.wisp_motd = env_str(env, "WISP_MOTD", null)
