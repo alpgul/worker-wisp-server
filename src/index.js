@@ -16,6 +16,10 @@ import { apply_env as apply_config, config } from "./config.js"
 import { ratelimit, get_client_attr, inc_client_attr, apply_env, start_cleanup } from "./ratelimit.js"
 import { metrics, reset as reset_metrics, render as render_metrics } from "./metrics.js"
 
+//re-exported so the wrangler durable_object binding can find the class in the
+//entry module
+export { GlobalRateLimiter } from "./ratelimit.js"
+
 //tls hygiene policy. returns null when the request may proceed, otherwise a
 //Response that short-circuits it.
 //
@@ -54,7 +58,7 @@ function get_client_ip(request) {
   return ip
 }
 
-function handle_websocket(server, path, client_ip, wisp_version) {
+async function handle_websocket(server, path, client_ip, wisp_version) {
   //pin binary frames to ArrayBuffer. with the websocket_standard_binary_type
   //flag (default on/after 2026-03-17) incoming binary messages arrive as Blob,
   //which our packet parsing (new Uint8Array(message.data)) cannot handle.
@@ -81,14 +85,14 @@ function handle_websocket(server, path, client_ip, wisp_version) {
     })
   } else {
     //legacy wsproxy connection: /host:port relays a single tcp stream
-    let stream_count = get_client_attr(client_ip, "streams")
+    let stream_count = await get_client_attr(client_ip, "streams")
     if (ratelimit.enabled && stream_count > ratelimit.connections_limit) {
       server.close()
       return
     }
 
     let wsproxy_conn = new WSProxyConnection(server, path)
-    inc_client_attr(client_ip, "streams")
+    await inc_client_attr(client_ip, "streams")
     wsproxy_conn.setup_connection().then(() => {
       wsproxy_conn.handle_tcp()
     }).catch(() => {
@@ -142,7 +146,7 @@ export default {
       //the presence of Sec-WebSocket-Protocol selects wisp v2; echo the chosen
       //subprotocol in the 101 response
       let headers = subprotocol ? { "Sec-WebSocket-Protocol": subprotocol } : {}
-      handle_websocket(server, url.pathname, client_ip, subprotocol ? 2 : 1)
+      await handle_websocket(server, url.pathname, client_ip, subprotocol ? 2 : 1)
       return new Response(null, { status: 101, headers, webSocket: client })
     }
 

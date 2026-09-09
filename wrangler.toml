@@ -7,11 +7,23 @@ compatibility_date = "2025-01-01"
 # worker instead of being served directly from the asset store.
 assets = { directory = "./assets", binding = "ASSETS", run_worker_first = true }
 
+# The rate limiter keeps its per-ip counters in a Durable Object, so the
+# fixed window is shared across the whole fleet instead of being per-isolate.
+# Enable it by uncommenting the rate-limit vars below; every isolate routes
+# its counter operations to the single "global" instance of GlobalRateLimiter.
+[durable_objects]
+bindings = [{ name = "GLOBAL_RATELIMITER", class_name = "GlobalRateLimiter" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GlobalRateLimiter"]
+
 # Optional environment variables for the worker.
 #
 #   RATELIMIT_ENABLED       "true" to enable the fixed-window rate limiter.
 #   RATELIMIT_CONNECTIONS   max new streams per ip per window (default 30).
 #   RATELIMIT_WINDOW        window length in seconds (default 60).
+#   BANDWIDTH_LIMIT         per-ip relayed-byte budget per window (default 26214400).
 #   STREAM_LIMIT_TOTAL      max concurrent streams per websocket (default 50).
 #   ALLOW_LOOPBACK          "true" to allow connections to loopback ips.
 #   ALLOW_PRIVATE           "true" to allow connections to private ips.

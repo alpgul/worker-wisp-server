@@ -162,7 +162,7 @@ export class WispConnection {
 
     //rate limited
     if (ratelimit.enabled) {
-      let stream_count = get_client_attr(this.client_ip, "streams")
+      let stream_count = await get_client_attr(this.client_ip, "streams")
       if (stream_count > ratelimit.connections_limit) {
         await this.send_close_packet(stream_id, close_reasons.CONN_THROTTLED)
         this.close_stream(stream_id)
@@ -171,7 +171,7 @@ export class WispConnection {
       //per-ip bandwidth budget: once the window's bytes are spent, no further
       //streams may be opened (existing streams are closed on their next data)
       if (ratelimit.bandwidth_limit > 0) {
-        let remaining = get_client_attr(this.client_ip, "bandwidth")
+        let remaining = await get_client_attr(this.client_ip, "bandwidth")
         if (remaining <= 0) {
           await this.send_close_packet(stream_id, close_reasons.CONN_THROTTLED)
           this.close_stream(stream_id)
@@ -221,7 +221,7 @@ export class WispConnection {
       this.send_continue_packet(stream_id, buffer_remaining)
     }
 
-    inc_client_attr(this.client_ip, "streams")
+    await inc_client_attr(this.client_ip, "streams")
   }
 
   //charge `amount` relayed bytes against the per-ip budget. when the budget is
@@ -229,7 +229,7 @@ export class WispConnection {
   //and new_stream refuses further CONNECTs until the window rolls over.
   async enforce_bandwidth(amount) {
     if (!ratelimit.enabled || ratelimit.bandwidth_limit <= 0) return
-    let remaining = spend_client_bandwidth(this.client_ip, amount)
+    let remaining = await spend_client_bandwidth(this.client_ip, amount)
     if (remaining !== undefined && remaining <= 0 && Object.keys(this.active_streams).length > 0) {
       await this.close_all_with_reason(close_reasons.CONN_THROTTLED)
     }
@@ -403,7 +403,7 @@ export class WispConnection {
   //per-window limit and eventually close with 0x49 (throttled).
   async reject_auth(reason) {
     if (ratelimit.enabled) {
-      let failures = inc_client_attr(this.client_ip, "auth_failures")
+      let failures = await inc_client_attr(this.client_ip, "auth_failures")
       if (failures > ratelimit.auth_fail_limit) {
         await this.send_close_packet(0, close_reasons.CONN_THROTTLED)
         this.terminate()
