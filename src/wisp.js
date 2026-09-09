@@ -27,7 +27,7 @@ import {
   HostBlockedError
 } from "./util.js"
 import { config } from "./config.js"
-import { ratelimit, get_client_attr, inc_client_attr } from "./ratelimit.js"
+import { ratelimit, get_client_attr, inc_client_attr, spend_client_bandwidth } from "./ratelimit.js"
 import { metrics } from "./metrics.js"
 
 export class WSProxyConnection {
@@ -168,6 +168,16 @@ export class WispConnection {
         this.close_stream(stream_id)
         return
       }
+      //per-ip bandwidth budget: once the window's bytes are spent, no further
+      //streams may be opened (existing streams are closed on their next data)
+      if (ratelimit.bandwidth_limit > 0) {
+        let remaining = get_client_attr(this.client_ip, "bandwidth")
+        if (remaining <= 0) {
+          await this.send_close_packet(stream_id, close_reasons.CONN_THROTTLED)
+          this.close_stream(stream_id)
+          return
+        }
+      }
     }
 
     //info looks valid - try to open the connection now
@@ -214,6 +224,26 @@ export class WispConnection {
     inc_client_attr(this.client_ip, "streams")
   }
 
+  //charge `amount` relayed bytes against the per-ip budget. when the budget is
+  //exhausted every active stream for this client is closed with CONN_THROTTLED,
+  //and new_stream refuses further CONNECTs until the window rolls over.
+  async enforce_bandwidth(amount) {
+    if (!ratelimit.enabled || ratelimit.bandwidth_limit <= 0) return
+    let remaining = spend_client_bandwidth(this.client_ip, amount)
+    if (remaining !== undefined && remaining <= 0 && Object.keys(this.active_streams).length > 0) {
+      await this.close_all_with_reason(close_reasons.CONN_THROTTLED)
+    }
+  }
+
+  //close every active stream with the given close reason (used to end the
+  //connection's streams when a per-ip limit is hit)
+  async close_all_with_reason(reason) {
+    for (let stream_id of Object.keys(this.active_streams)) {
+      await this.send_close_packet(Number(stream_id), reason)
+      this.close_stream(Number(stream_id))
+    }
+  }
+
   //ws -> tcp. data is queued and drained asynchronously. the queue is capped
   //at queue_size; when it is full, the caller awaits a slot, mirroring the
   //blocking asyncio.Queue.put() in connection.py. workerd delivers ws messages
@@ -224,6 +254,8 @@ export class WispConnection {
     if (!stream || stream.closed) return
     metrics.add("bytes_ws_to_tcp_total", data.length)
     metrics.inc("packets_ws_to_tcp_total")
+    await this.enforce_bandwidth(data.length)
+    if (stream.closed) return //throttled away while spending
     while (stream.queue.length >= queue_size && !stream.closed) {
       await new Promise(resolve => stream.waiters.push(resolve))
     }
@@ -285,6 +317,9 @@ export class WispConnection {
 
       metrics.add("bytes_tcp_to_ws_total", data.length)
       metrics.inc("packets_tcp_to_ws_total")
+
+      await this.enforce_bandwidth(data.length)
+      if (stream.closed) return //throttled away while spending
 
       //stop reading the socket while the downstream queue is full: this both
       //bounds our memory and lets tcp backpressure reach the remote producer

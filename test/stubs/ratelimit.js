@@ -5,15 +5,24 @@ export const ratelimit = {
   enabled: false,
   connections_limit: 30,
   auth_fail_limit: 5,
-  window_size: 60
+  window_size: 60,
+  bandwidth_limit: 0
 }
 
+function clientOf(ip) {
+  if (!clients.has(ip)) clients.set(ip, { streams: 0, auth_failures: 0, bandwidth: ratelimit.bandwidth_limit })
+  return clients.get(ip)
+}
 export function get_client_attr(ip, attr) {
-  if (!clients.has(ip)) clients.set(ip, { streams: 0 })
-  return clients.get(ip)[attr]
+  return clientOf(ip)[attr]
 }
 export function inc_client_attr(ip, attr, amount = 1) {
-  if (!clients.has(ip)) clients.set(ip, { streams: 0 })
-  clients.get(ip)[attr] = (clients.get(ip)[attr] || 0) + amount
-  return clients.get(ip)[attr]
+  clientOf(ip)[attr] = (clientOf(ip)[attr] || 0) + amount
+  return clientOf(ip)[attr]
+}
+export function spend_client_bandwidth(ip, amount) {
+  const client = clientOf(ip)
+  if (client.bandwidth <= 0) return client.bandwidth
+  client.bandwidth -= amount
+  return client.bandwidth
 }

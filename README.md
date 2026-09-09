@@ -56,6 +56,7 @@ Configuration is done via Worker environment variables, read from the `env` bind
 | `RATELIMIT_CONNECTIONS` | `30`    | Max new streams per IP per window.    |
 | `RATELIMIT_AUTH_FAILURES`| `5`    | Max failed password handshakes per IP per window, then close with 0x49. |
 | `RATELIMIT_WINDOW`      | `60`    | Window length in seconds.             |
+| `BANDWIDTH_LIMIT`       | `26214400` | Per-IP relayed-byte budget per window (both directions). Once spent, existing streams close with `CLOSE 0x49` and new `CONNECT`s are refused until the window rolls over. `0` disables the byte cap (stream/auth limits still apply). |
 | `STREAM_LIMIT_TOTAL`    | `50`    | Max concurrent streams per WebSocket connection. |
 | `ALLOW_LOOPBACK`        | `false` | `true` allows connections to loopback IPs. |
 | `ALLOW_PRIVATE`         | `false` | `true` allows connections to private IPs.  |
@@ -85,7 +86,7 @@ Wisp only has client→server flow control (CONTINUE credits); there is no way f
 
 Liveness completes the picture: `connect()` gets an explicit `SOCKET_IDLE_TIMEOUT`, while the connection-level sweep (`STREAM_IDLE_TIMEOUT`, run lazily on inbound packets) reclaims streams that stay silent, closing them with `0x47` so a peer that went quiet doesn't pin a stream forever. Clients that want the server to notice a dead connection should send a periodic keepalive (`keepalive_interval` in wisp.js) so the sweep is triggered by the stream's own liveness clock.
 
-The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee.
+The rate limiter is per-isolate and in-memory: Workers isolates are ephemeral, so the counters only apply while an isolate stays warm. This deters simple abuse but is not a hard global guarantee. With `RATELIMIT_ENABLED`, the `BANDWIDTH_LIMIT` byte budget (the inverse of the downstream queue: instead of capping a buffered backlog it caps the sustained relay rate) augments the stream-count and failed-auth counters — a client that burns through its window's bytes has its streams closed with `0x49` and cannot open new ones until the window rolls over.
 
 ## Testing
 

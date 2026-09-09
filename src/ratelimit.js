@@ -14,7 +14,12 @@ const ratelimit = {
   //max failed password-handshakes per ip per window, before closing with 0x49
   auth_fail_limit: 5,
   //fixed window size, in seconds
-  window_size: 60
+  window_size: 60,
+  //per-ip byte budget: total data relayed (ws->tcp + tcp->ws) per window. the
+  //inverse of downstream buffering - instead of bounding a queued backlog it
+  //caps the sustained byte rate, so a single client cannot saturate the
+  //free-tier quota. 0 disables the byte cap (stream/auth limits still apply).
+  bandwidth_limit: 25 * 1024 * 1024
 }
 
 function env_bool(env, name, default_value) {
@@ -38,6 +43,7 @@ export function apply_env(env) {
   ratelimit.connections_limit = env_num(env, "RATELIMIT_CONNECTIONS", 30)
   ratelimit.auth_fail_limit = env_num(env, "RATELIMIT_AUTH_FAILURES", 5)
   ratelimit.window_size = env_num(env, "RATELIMIT_WINDOW", 60)
+  ratelimit.bandwidth_limit = env_num(env, "BANDWIDTH_LIMIT", 25 * 1024 * 1024)
 }
 
 function init_client(client_ip) {
@@ -45,6 +51,7 @@ function init_client(client_ip) {
   active_clients.set(client_ip, {
     streams: 0, //number of newly created streams
     auth_failures: 0, //number of failed password handshakes
+    bandwidth: ratelimit.bandwidth_limit, //remaining per-window byte budget
     start: Date.now() / 1000
   })
 }
@@ -60,6 +67,18 @@ export function inc_client_attr(client_ip, attr, amount = 1) {
   let client = active_clients.get(client_ip)
   if (client) client[attr] += amount
   return client ? client[attr] : undefined
+}
+
+//charge `amount` bytes against the client's per-window budget, returning the
+//remaining budget (the caller throttles the client when it hits 0). once the
+//budget is spent, further charges are short-circuited so the remainder
+//stays <= 0 rather than ballooning negative.
+export function spend_client_bandwidth(client_ip, amount) {
+  init_client(client_ip)
+  let client = active_clients.get(client_ip)
+  if (!client || client.bandwidth <= 0) return client ? client.bandwidth : undefined
+  client.bandwidth -= amount
+  return client.bandwidth
 }
 
 //periodically clear the counters so a single window never grows forever.

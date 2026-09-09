@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import worker from "../src/index.js"
 import { https_policy } from "../src/index.js"
+import { ratelimit, apply_env as apply_ratelimit } from "../src/ratelimit.js"
 
 //the fetch handler's first call registers a setInterval cleanup ticker
 //(ratelimit.start_cleanup) which would keep the test process alive; shadow it
@@ -100,4 +101,21 @@ test("fetch: /__metrics serves counter text and resets on demand", async () => {
 test("fetch: /__metrics rejects non-GET methods", async () => {
   const res = await worker.fetch(new Request("https://example.com/__metrics", { method: "POST" }), {})
   assert.equal(res.status, 405)
+})
+
+test("ratelimit env: BANDWIDTH_LIMIT overrides the per-ip byte budget", () => {
+  const origEnabled = ratelimit.enabled
+  const origLimit = ratelimit.bandwidth_limit
+  try {
+    apply_ratelimit({ RATELIMIT_ENABLED: "true", BANDWIDTH_LIMIT: "1048576" })
+    assert.equal(ratelimit.enabled, true)
+    assert.equal(ratelimit.bandwidth_limit, 1048576)
+    apply_ratelimit({})
+    assert.equal(ratelimit.bandwidth_limit, 25 * 1024 * 1024, "falls back to the 25 MiB default")
+    assert.equal(ratelimit.enabled, false)
+  } finally {
+    apply_ratelimit({})
+    ratelimit.enabled = origEnabled
+    ratelimit.bandwidth_limit = origLimit
+  }
 })

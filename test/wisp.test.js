@@ -823,3 +823,76 @@ test("stream activity (client data) resets the idle clock", async () => {
     config.stream_idle_timeout = origTimeout
   }
 })
+
+test("bandwidth cap: over-budget client streams close with 0x49 and new streams are refused", async () => {
+  //a fresh ip, so the stub's per-client budget starts at bandwidth_limit
+  const ip = "192.0.2.1"
+  const origEnabled = ratelimit.enabled
+  const origLimit = ratelimit.bandwidth_limit
+  const origConnections = ratelimit.connections_limit
+  ratelimit.enabled = true
+  ratelimit.bandwidth_limit = 10
+  ratelimit.connections_limit = 50 //only the byte budget should bite
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", ip)
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    const closeWith = (id, reason) => ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === id && m[5] === reason)
+    const throttle = (id) => closeWith(id, 0x49)
+
+    //6 bytes relayed stays within the 10-byte budget
+    await wisp.handle_ws_message(msg(create_packet(0x02, 1, encode("123456"))))
+    await tick()
+    assert.equal(throttle(1), undefined, "under-budget data is relayed")
+
+    //another 6 bytes exhausts the budget and closes every stream with 0x49
+    await wisp.handle_ws_message(msg(create_packet(0x02, 1, encode("abcdef"))))
+    await tick()
+    const closed = throttle(1)
+    assert.ok(closed, "stream closed once the budget is spent")
+    assert.equal(stream.closed, true, "stream entry is torn down")
+
+    //while the budget is spent, new CONNECTs are refused with 0x49 too
+    await wisp.handle_ws_message(msg(connectPacket(2, "example.com", 80)))
+    await tick()
+    assert.ok(throttle(2), "over-budget client cannot open further streams")
+  } finally {
+    ratelimit.enabled = origEnabled
+    ratelimit.bandwidth_limit = origLimit
+    ratelimit.connections_limit = origConnections
+  }
+})
+
+test("bandwidth cap: a spent budget ends tcp->ws relay with 0x49", async () => {
+  const ip = "198.51.100.1"
+  const origEnabled = ratelimit.enabled
+  const origLimit = ratelimit.bandwidth_limit
+  ratelimit.enabled = true
+  ratelimit.bandwidth_limit = 5
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", ip)
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    //remote produces an 8-byte chunk: 5 allowed, the rest pushes over budget
+    stream.conn._push(encode("12345678"))
+    let throttled = false
+    const deadline = Date.now() + 3000
+    while (!throttled && Date.now() < deadline) {
+      await tick(10)
+      throttled = !!ws.handler.msgs.find(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1 && m[5] === 0x49)
+    }
+    assert.ok(throttled, "tcp->ws relay into a spent budget closes with 0x49")
+    assert.equal(stream.closed, true, "stream entry is torn down")
+  } finally {
+    ratelimit.enabled = origEnabled
+    ratelimit.bandwidth_limit = origLimit
+  }
+})
