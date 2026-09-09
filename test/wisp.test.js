@@ -896,3 +896,118 @@ test("bandwidth cap: a spent budget ends tcp->ws relay with 0x49", async () => {
     ratelimit.bandwidth_limit = origLimit
   }
 })
+
+test("wire coalescing: a burst of small tcp chunks becomes one DATA packet", async () => {
+  const origMax = config.coalesce_max
+  const origTimeout = config.coalesce_timeout
+  config.coalesce_max = 65536
+  config.coalesce_timeout = 20
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    stream.conn._push(encode("abc"))
+    stream.conn._push(encode("def"))
+    stream.conn._push(encode("ghi"))
+    await tick(40) //let the coalesce timer deliver the parked batch
+
+    const dataPackets = ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1)
+    assert.equal(dataPackets.length, 1, "burst delivered as a single DATA packet")
+    assert.equal(decode(dataPackets[0].slice(5)), "abcdefghi", "payload is the concatenated burst")
+  } finally {
+    config.coalesce_max = origMax
+    config.coalesce_timeout = origTimeout
+  }
+})
+
+test("wire coalescing: a full batch flushes immediately without waiting for the timer", async () => {
+  const origMax = config.coalesce_max
+  const origTimeout = config.coalesce_timeout
+  config.coalesce_max = 10
+  config.coalesce_timeout = 5000
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    stream.conn._push(encode("ab"))
+    stream.conn._push(encode("cde"))
+    await tick(5)
+    assert.equal(
+      ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1).length,
+      0, "bytes below the burst cap are parked, not sent")
+
+    stream.conn._push(encode("fghij")) //now 10 bytes >= coalesce_max -> flush right away
+    await tick(5)
+
+    const dataPackets = ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1)
+    assert.equal(dataPackets.length, 1, "boundary chunk flushes the whole batch")
+    assert.equal(decode(dataPackets[0].slice(5)), "abcdefghij")
+  } finally {
+    config.coalesce_max = origMax
+    config.coalesce_timeout = origTimeout
+  }
+})
+
+test("wire coalescing: the parked tail is flushed before a voluntary close on EOF", async () => {
+  const origMax = config.coalesce_max
+  const origTimeout = config.coalesce_timeout
+  config.coalesce_max = 65536
+  config.coalesce_timeout = 5000
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    stream.conn._push(encode("tail"))
+    stream.conn.eof()
+    await tick(10)
+
+    const dataPackets = ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1)
+    assert.equal(dataPackets.length, 1, "tail bytes are delivered, not dropped")
+    assert.equal(decode(dataPackets[0].slice(5)), "tail")
+    assert.ok(
+      ws.handler.msgs.some(m => m[0] === 0x04 && (m[1] | (m[2] << 8)) === 1 && m[5] === 0x02),
+      "remote EOF still closes the stream voluntarily")
+  } finally {
+    config.coalesce_max = origMax
+    config.coalesce_timeout = origTimeout
+  }
+})
+
+test("wire coalescing: timeout 0 keeps one DATA packet per chunk", async () => {
+  const origMax = config.coalesce_max
+  const origTimeout = config.coalesce_timeout
+  config.coalesce_max = 65536
+  config.coalesce_timeout = 0
+  try {
+    const ws = makeWs()
+    const wisp = new WispConnection(ws, "/", "127.0.0.1")
+    wisp.setup()
+    await wisp.handle_ws_message(msg(connectPacket(1, "example.com", 80)))
+    await tick()
+    const stream = streamOf(wisp, 1)
+
+    stream.conn._push(encode("ab"))
+    stream.conn._push(encode("cd"))
+    await tick()
+
+    const dataPackets = ws.handler.msgs.filter(m => m[0] === 0x02 && (m[1] | (m[2] << 8)) === 1)
+    assert.equal(dataPackets.length, 2, "each chunk is relayed as its own DATA packet")
+    assert.equal(decode(dataPackets[0].slice(5)), "ab")
+    assert.equal(decode(dataPackets[1].slice(5)), "cd")
+  } finally {
+    config.coalesce_max = origMax
+    config.coalesce_timeout = origTimeout
+  }
+})

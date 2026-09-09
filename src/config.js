@@ -40,6 +40,15 @@ const config = {
   //cloudflare's ws buffers and the connection dies with a late, unexplained
   //NETWORK_ERROR instead.
   downstream_stall_timeout: 10000,
+  //tcp->ws wire coalescing: the tcp reader accumulates small chunks into one
+  //DATA packet to amortize the per-message ws framing overhead of bulk
+  //transfers. bytes are delivered when the batch reaches coalesce_max, when
+  //the downstream queue is already full (backpressure takes over), or after
+  //coalesce_timeout ms of quiet - so interactive traffic is only ever delayed
+  //by one coalesce window per burst, not inflated per chunk.
+  coalesce_max: 65536,
+  //0 disables coalescing entirely (every chunk is sent as its own packet)
+  coalesce_timeout: 10,
   //close a stream whose wisp-level activity is older than this (ms) - swept
   //lazily on inbound packets. 0 disables the stream-level sweep; the per-socket
   //idleTimeout below still reclaims each socket.
@@ -91,6 +100,8 @@ export function apply_env(env) {
   config.enforce_https = env_bool(env, "ENFORCE_HTTPS", true)
   config.downstream_buffer = env_num(env, "DOWNSTREAM_BUFFER", 512)
   config.downstream_stall_timeout = env_num(env, "DOWNSTREAM_STALL_TIMEOUT", 10000)
+  config.coalesce_max = env_num(env, "WISP_COALESCE_MAX", 65536)
+  config.coalesce_timeout = env_num(env, "WISP_COALESCE_TIMEOUT", 10)
   config.stream_idle_timeout = env_num(env, "STREAM_IDLE_TIMEOUT", 120000)
   config.socket_idle_timeout = env_num(env, "SOCKET_IDLE_TIMEOUT", 60000)
 }

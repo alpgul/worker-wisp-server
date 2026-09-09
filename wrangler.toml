@@ -24,6 +24,10 @@ new_sqlite_classes = ["GlobalRateLimiter"]
 #   RATELIMIT_CONNECTIONS   max new streams per ip per window (default 30).
 #   RATELIMIT_WINDOW        window length in seconds (default 60).
 #   BANDWIDTH_LIMIT         per-ip relayed-byte budget per window (default 26214400).
+#   WISP_COALESCE_MAX       tcp->ws batch cap in bytes before a DATA packet is
+#                           flushed (default 65536).
+#   WISP_COALESCE_TIMEOUT   ms to hold small tcp chunks for batching (default
+#                           10; 0 sends every chunk as its own packet).
 #   STREAM_LIMIT_TOTAL      max concurrent streams per websocket (default 50).
 #   ALLOW_LOOPBACK          "true" to allow connections to loopback ips.
 #   ALLOW_PRIVATE           "true" to allow connections to private ips.

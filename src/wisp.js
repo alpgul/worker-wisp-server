@@ -19,6 +19,7 @@ import {
   array_from_uint,
   uint_from_array,
   create_packet,
+  concat_uint8array,
   create_info_packet,
   parse_extensions,
   serialize_extensions,
@@ -307,19 +308,38 @@ export class WispConnection {
       try {
         data = await stream.conn.recv()
       } catch (e) {
-        //socket error
+        //socket error: deliver any bytes already read, then close
+        this._flush_coalesce(stream, stream_id)
         await this.send_close_packet(stream_id, close_reasons.NETWORK_ERROR)
         this.close_stream(stream_id)
         return
       }
 
-      if (data.length === 0) break //connection closed
+      if (data.length === 0) {
+        //connection closed by the remote: flush the coalesce tail first, then
+        //close voluntarily so the client receives every byte it was sent
+        this._flush_coalesce(stream, stream_id)
+        await this.send_close_packet(stream_id, close_reasons.VOLUNTARY)
+        this.close_stream(stream_id)
+        return
+      }
 
       metrics.add("bytes_tcp_to_ws_total", data.length)
-      metrics.inc("packets_tcp_to_ws_total")
 
       await this.enforce_bandwidth(data.length)
       if (stream.closed) return //throttled away while spending
+
+      stream.last_activity = Date.now()
+      this._coalesce_append(stream, data)
+
+      //flush the batch when it is full, when the downstream queue is already
+      //full (the stall wait must bound the queue, not parked bytes), or when
+      //coalescing is disabled (timeout 0 - the historical per-chunk behavior)
+      let flush_now = stream.coalesce.len >= config.coalesce_max ||
+                      (config.downstream_buffer > 0 && stream.out_queue.length >= config.downstream_buffer) ||
+                      config.coalesce_timeout <= 0
+      if (flush_now) this._flush_coalesce(stream, stream_id)
+      if (stream.closed) return
 
       //stop reading the socket while the downstream queue is full: this both
       //bounds our memory and lets tcp backpressure reach the remote producer
@@ -342,15 +362,43 @@ export class WispConnection {
       }
       if (stream.closed) return
 
-      let data_packet = create_packet(packet_types.DATA, stream_id, data)
-      stream.out_queue.push(data_packet)
-      stream.last_activity = Date.now()
-      metrics.observe_out_queue(stream.out_queue.length)
-      this.drain_downstream(stream_id)
+      //bytes still parked below the coalesce cap: let the timer deliver them
+      //so a later chunk in the same burst can join the same DATA packet
+      if (!flush_now && stream.coalesce.len > 0) this._arm_coalesce_timer(stream, stream_id)
     }
+  }
 
-    await this.send_close_packet(stream_id, close_reasons.VOLUNTARY)
-    this.close_stream(stream_id)
+  //append a tcp chunk to the per-stream coalescer (bytes are held until flush)
+  _coalesce_append(stream, data) {
+    stream.coalesce.chunks.push(data)
+    stream.coalesce.len += data.length
+  }
+
+  //deliver the parked chunks as a single DATA packet. a closed stream drops
+  //them instead (already torn down; the client ignores late packets).
+  _flush_coalesce(stream, stream_id) {
+    if (stream.coalesce.timer) {
+      clearTimeout(stream.coalesce.timer)
+      stream.coalesce.timer = null
+    }
+    if (stream.closed || stream.coalesce.len === 0) return
+    let data_packet = create_packet(packet_types.DATA, stream_id, concat_uint8array(...stream.coalesce.chunks))
+    stream.coalesce.chunks.length = 0
+    stream.coalesce.len = 0
+    metrics.inc("packets_tcp_to_ws_total")
+    stream.out_queue.push(data_packet)
+    metrics.observe_out_queue(stream.out_queue.length)
+    this.drain_downstream(stream_id)
+  }
+
+  //flush whatever is parked after coalesce_timeout ms of quiet. one-shot: the
+  //next chunk re-arms it. no-op while coalescing is disabled (timeout 0).
+  _arm_coalesce_timer(stream, stream_id) {
+    if (stream.coalesce.timer || config.coalesce_timeout <= 0) return
+    stream.coalesce.timer = setTimeout(() => {
+      stream.coalesce.timer = null
+      if (!stream.closed) this._flush_coalesce(stream, stream_id)
+    }, config.coalesce_timeout)
   }
 
   //drain the bounded tcp->ws buffer. a full buffer marks the stream as
@@ -460,6 +508,15 @@ export class WispConnection {
     let stream = this.active_streams[stream_id]
     stream.closed = true
     metrics.inc("streams_closed_total")
+    //drop any parked coalesce bytes and their pending flush timer
+    if (stream.coalesce) {
+      if (stream.coalesce.timer) {
+        clearTimeout(stream.coalesce.timer)
+        stream.coalesce.timer = null
+      }
+      stream.coalesce.chunks.length = 0
+      stream.coalesce.len = 0
+    }
     //wake up any queue_ws_data calls blocked on a full queue
     while (stream.waiters.length > 0) stream.waiters.shift()()
     //wake up tcp readers blocked on a full downstream buffer
@@ -511,6 +568,10 @@ export class WispConnection {
         out_waiters: [],
         out_draining: false,
         stalled_at: null,
+        //tcp->ws coalescer: chunks accumulate here until they either reach
+        //coalesce_max, the downstream queue fills up, or the coalesce timer
+        //fires (see stream_tcp_to_ws / _flush_coalesce)
+        coalesce: { chunks: [], len: 0, timer: null },
         //last wisp-level activity (inbound/outbound DATA or a close), used by
         //_sweep_idle_streams to reclaim silent streams with TRANSFER_TIMEOUT
         last_activity: Date.now()
